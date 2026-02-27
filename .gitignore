@@ -1,0 +1,10 @@
+*.gguf
+*.bin
+*.onnx
+*.wav
+*.run
+*.deb
+*.log
+__pycache__/
+*.pyc
+.env
