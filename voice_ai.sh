@@ -17,11 +17,99 @@ trap 'rm -rf $TMPDIR_AI' EXIT
 
 SYSTEM="You are a helpful voice assistant. Keep responses under 3 sentences. No markdown. Speak naturally."
 
+detect_windows_host() {
+    if [ -n "${WINDOWS_HOST:-}" ]; then
+        echo "$WINDOWS_HOST"
+        return
+    fi
+
+    if [ -f /etc/resolv.conf ]; then
+        awk '/^nameserver / { print $2; exit }' /etc/resolv.conf
+        return
+    fi
+
+    echo "127.0.0.1"
+}
+
+can_reach_pulse() {
+    local host="$1"
+    timeout 1 bash -c "cat < /dev/null > /dev/tcp/${host}/4713" >/dev/null 2>&1
+}
+
+choose_pulse_server() {
+    local candidates=()
+    local env_host=""
+
+    if [ -n "${PULSE_SERVER:-}" ]; then
+        env_host="${PULSE_SERVER#tcp:}"
+        env_host="${env_host%%:*}"
+        [ -n "$env_host" ] && candidates+=("$env_host")
+    fi
+
+    candidates+=("$(detect_windows_host)")
+
+    if command -v ip >/dev/null 2>&1; then
+        local gw
+        gw="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')"
+        [ -n "$gw" ] && candidates+=("$gw")
+    fi
+
+    candidates+=("host.docker.internal" "127.0.0.1" "localhost")
+
+    local seen=""
+    local host
+    for host in "${candidates[@]}"; do
+        [ -z "$host" ] && continue
+        case " $seen " in
+            *" $host "*) continue ;;
+        esac
+        seen="$seen $host"
+
+        if can_reach_pulse "$host"; then
+            echo "tcp:${host}:4713"
+            return
+        fi
+    done
+
+    echo "tcp:$(detect_windows_host):4713"
+}
+
+WINDOWS_HOST=$(detect_windows_host)
+export PULSE_SERVER="$(choose_pulse_server)"
+
+record_audio() {
+    local out_wav="$1"
+    local raw_file="$TMPDIR_AI/input.raw"
+
+    rm -f "$raw_file" "$out_wav"
+
+    if command -v parec >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1; then
+        if timeout "${LISTEN_SECONDS:-5}" parec --format=s16le --rate=16000 --channels=1 > "$raw_file" 2>/dev/null; then
+            ffmpeg -y -f s16le -ar 16000 -ac 1 -i "$raw_file" "$out_wav" >/dev/null 2>&1 || true
+            if [ -s "$out_wav" ]; then
+                return 0
+            fi
+        fi
+    fi
+
+    if command -v arecord >/dev/null 2>&1; then
+        if arecord -f S16_LE -r 16000 -c 1 -d "${LISTEN_SECONDS:-5}" "$out_wav" 2>/dev/null; then
+            [ -s "$out_wav" ] && return 0
+        fi
+    fi
+
+    return 1
+}
+
 echo "Voice AI | Mistral 7B Q4_K_M | GTX 1050 Ti CUDA | Ctrl+C to exit"
 
 while true; do
     echo "Listening 5s..."
-    arecord -f S16_LE -r 16000 -c 1 -d 5 $TMPDIR_AI/input.wav 2>/dev/null
+    if ! record_audio "$TMPDIR_AI/input.wav"; then
+        echo "Audio capture failed (PulseAudio/ALSA unavailable)."
+        echo "Tip: start Windows PulseAudio and ensure PULSE_SERVER is reachable."
+        continue
+    fi
 
     $WHISPER_BIN -m $WHISPER_MODEL -f $TMPDIR_AI/input.wav \
         --output-txt --output-file $TMPDIR_AI/transcript \

@@ -19,32 +19,61 @@ def listen(tmpdir: str) -> str:
 
     print(f"🔴 Listening {LISTEN_SECONDS}s...", end="", flush=True)
 
-    # parec records raw PCM — wrap in wav header via sox or write raw then convert
+    # parec records raw PCM to stdout; capture to file then convert to wav
     raw_file = os.path.join(tmpdir, "input.raw")
-    rec_proc = subprocess.Popen(
-        ["parec", "--format=s16le", "--rate=16000", "--channels=1", raw_file],
-        env=pulse_env,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(LISTEN_SECONDS)
-    rec_proc.terminate()
-    rec_proc.wait()
+    rec_ok = False
+
+    try:
+        with open(raw_file, "wb") as raw_out:
+            rec_proc = subprocess.Popen(
+                ["parec", "--format=s16le", "--rate=16000", "--channels=1"],
+                env=pulse_env,
+                stdout=raw_out,
+                stderr=subprocess.DEVNULL,
+            )
+            time.sleep(LISTEN_SECONDS)
+            rec_proc.terminate()
+            rec_proc.wait(timeout=5)
+
+        rec_ok = os.path.exists(raw_file) and os.path.getsize(raw_file) > 0
+    except Exception:
+        rec_ok = False
+
+    if not rec_ok:
+        try:
+            subprocess.run(
+                [
+                    "arecord",
+                    "-f", "S16_LE",
+                    "-r", "16000",
+                    "-c", "1",
+                    "-d", str(LISTEN_SECONDS),
+                    audio_file,
+                ],
+                check=True,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            print(" failed")
+            return ""
+
     print(" done")
 
-    # Convert raw PCM to WAV so whisper.cpp can read it
-    sox_result = subprocess.run(
-        ["sox", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16",
-         "-c", "1", raw_file, audio_file],
-        capture_output=True
-    )
-
-    if sox_result.returncode != 0:
-        # Fallback: use ffmpeg if sox not available
-        subprocess.run(
-            ["ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1",
-             "-i", raw_file, audio_file],
+    if rec_ok:
+        # Convert raw PCM to WAV so whisper.cpp can read it
+        sox_result = subprocess.run(
+            ["sox", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16",
+             "-c", "1", raw_file, audio_file],
             capture_output=True
         )
+
+        if sox_result.returncode != 0:
+            # Fallback: use ffmpeg if sox not available
+            subprocess.run(
+                ["ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1",
+                 "-i", raw_file, audio_file],
+                capture_output=True
+            )
 
     if not os.path.exists(audio_file):
         return ""

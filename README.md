@@ -60,10 +60,27 @@ sudo apt install alsa-utils ffmpeg
 ## Usage
 ```bash
 chmod +x voice_ai.sh
+chmod +x preflight_voice.sh
+./preflight_voice.sh
 ./voice_ai.sh
 ```
 
 Speak after the prompt. Christopher listens for 5 seconds, generates a response, speaks it back.
+
+### WSL2 Microphone Troubleshooting
+
+If voice mode starts but never detects speech:
+
+1. Start PulseAudio on Windows (`C:\PulseAudio\start-pulseaudio.cmd`).
+2. In WSL, set `PULSE_SERVER` if needed:
+
+```bash
+export PULSE_SERVER=tcp:$(awk '/^nameserver / {print $2; exit}' /etc/resolv.conf):4713
+```
+
+3. Re-run `./voice_ai.sh`.
+
+The script now tries PulseAudio capture first (`parec`) and falls back to ALSA (`arecord`) automatically.
 
 ---
 

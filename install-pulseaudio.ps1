@@ -42,10 +42,10 @@ Expand-Archive -Path $zipPath -DestinationPath $target -Force
 Write-Host "Writing config.pa..."
 @"
 ### PulseAudio minimal config for WSL2
-load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1
-load-module module-esound-protocol-tcp auth-ip-acl=127.0.0.1
-daemonize = no
-set-default-sink 0
+load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1;172.16.0.0/12;192.168.0.0/16 listen=0.0.0.0
+load-module module-waveout sink_name=waveout source_name=wavein
+set-default-sink waveout
+set-default-source wavein
 "@ | Set-Content "$target\config.pa"
 
 # --- Write daemon.conf ---
@@ -66,7 +66,7 @@ Write-Host "Creating start-pulseaudio.cmd..."
 title PulseAudio for WSL2
 cd /d %~dp0
 echo Starting PulseAudio...
-pulseaudio.exe -F config.pa -n
+start "" /min "%~dp0bin\pulseaudio.exe" -F "%~dp0config.pa" -n --exit-idle-time=-1 --daemonize=no --log-target=file:"%~dp0pulseaudio.log"
 "@ | Set-Content "$target\start-pulseaudio.cmd"
 
 # --- Add to PATH if missing ---
