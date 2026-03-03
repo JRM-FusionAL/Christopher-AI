@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -29,19 +30,71 @@ from dotenv import dotenv_values
 
 ENV = dotenv_values(Path(__file__).parent / ".env")
 
-LLAMA_SERVER_BIN  = os.path.expanduser("~/llama.cpp/build/bin/llama-server")
-LLAMA_MODEL       = os.path.expanduser(ENV.get("LLAMA_MODEL", "~/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf"))
+
+def _expand(path: str) -> str:
+    return os.path.expanduser(os.path.expandvars(path))
+
+
+def _first_existing_path(candidates: list[str]) -> str:
+    first_non_empty = ""
+    for raw in candidates:
+        if not raw:
+            continue
+        candidate = _expand(raw)
+        if not first_non_empty:
+            first_non_empty = candidate
+        if Path(candidate).exists():
+            return candidate
+    return first_non_empty
+
+
+def _which_any(candidates: list[str], fallback: str = "") -> str:
+    for name in candidates:
+        found = shutil.which(name)
+        if found:
+            return found
+    return fallback
+
+LLAMA_SERVER_BIN  = _first_existing_path([
+    ENV.get("LLAMA_SERVER_BIN", ""),
+    "~/llama.cpp/build/bin/llama-server",
+    "~/llama.cpp/build/bin/llama-server.exe",
+    "/home/oledad/llama.cpp/build/bin/llama-server",
+])
+LLAMA_MODEL       = _first_existing_path([
+    ENV.get("LLAMA_MODEL", ""),
+    "~/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+    "~/llama.cpp/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+    "/home/oledad/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+])
 LLAMA_SERVER_URL  = ENV.get("LLAMA_SERVER_URL", "http://localhost:8080")
 LLAMA_NGL         = int(ENV.get("LLAMA_NGL", "99"))
 LLAMA_THREADS     = int(ENV.get("LLAMA_THREADS", "4"))
 LLAMA_CTX         = int(ENV.get("LLAMA_CTX", "2048"))
 
-WHISPER_BIN       = os.path.expanduser("~/whisper.cpp/build/bin/whisper-cli")
-WHISPER_MODEL     = os.path.expanduser("~/whisper.cpp/models/ggml-base.en.bin")
+WHISPER_BIN       = _first_existing_path([
+    ENV.get("WHISPER_BIN", ""),
+    "~/whisper.cpp/build/bin/whisper-cli",
+    "~/whisper.cpp/build/bin/whisper-cli.exe",
+    "/home/oledad/whisper.cpp/build/bin/whisper-cli",
+])
+WHISPER_MODEL     = _first_existing_path([
+    ENV.get("WHISPER_MODEL", ""),
+    "~/whisper.cpp/models/ggml-base.en.bin",
+    "/home/oledad/whisper.cpp/models/ggml-base.en.bin",
+])
 
-PIPER_BIN         = "piper"
-PIPER_MODEL       = os.path.expanduser("~/piper_models/en_US-libritts-high.onnx")
-PIPER_CONFIG      = os.path.expanduser("~/piper_models/en_US-libritts-high.onnx.json")
+PIPER_BIN         = _which_any([ENV.get("PIPER_BIN", ""), "piper", "piper.exe"], fallback="piper")
+PIPER_MODEL       = _first_existing_path([
+    ENV.get("PIPER_MODEL", ""),
+    "~/piper_models/en_US-libritts-high.onnx",
+    "/home/oledad/piper_models/en_US-libritts-high.onnx",
+])
+PIPER_CONFIG      = _first_existing_path([
+    ENV.get("PIPER_CONFIG", ""),
+    "~/piper_models/en_US-libritts-high.onnx.json",
+    "/home/oledad/piper_models/en_US-libritts-high.onnx.json",
+])
 
 FUSIONAL_API_KEY  = ENV.get("FUSIONAL_API_KEY", "")
 BI_URL            = ENV.get("FUSIONAL_BI_URL", "http://localhost:8101")
@@ -176,6 +229,28 @@ def start_llama_server():
     ]
     print(f"🚀 Starting llama-server (ngl={LLAMA_NGL}, ctx={LLAMA_CTX})...")
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def validate_runtime(voice_mode: bool, skip_server_start: bool) -> list[str]:
+    problems = []
+
+    if not skip_server_start:
+        if not Path(LLAMA_SERVER_BIN).exists():
+            problems.append(f"LLAMA_SERVER_BIN not found: {LLAMA_SERVER_BIN}")
+        if not Path(LLAMA_MODEL).exists():
+            problems.append(f"LLAMA_MODEL not found: {LLAMA_MODEL}")
+
+    if voice_mode:
+        if not Path(WHISPER_BIN).exists():
+            problems.append(f"WHISPER_BIN not found: {WHISPER_BIN}")
+        if not Path(WHISPER_MODEL).exists():
+            problems.append(f"WHISPER_MODEL not found: {WHISPER_MODEL}")
+        if not Path(PIPER_MODEL).exists():
+            problems.append(f"PIPER_MODEL not found: {PIPER_MODEL}")
+        if not Path(PIPER_CONFIG).exists():
+            problems.append(f"PIPER_CONFIG not found: {PIPER_CONFIG}")
+
+    return problems
 
 
 def chat_completion(messages: list, max_tokens=300) -> str:
@@ -349,6 +424,16 @@ def main():
         print(f"  PulseAudio: {PULSE_SERVER}")
     print("=" * 55)
     print()
+
+    preflight_issues = validate_runtime(voice_mode=voice_mode, skip_server_start=args.no_server)
+    if preflight_issues:
+        print("⚠️  Runtime preflight found missing dependencies:")
+        for issue in preflight_issues:
+            print(f"   - {issue}")
+        print("\nSet absolute paths in Christopher-AI/.env to override defaults.")
+        if voice_mode or not args.no_server:
+            print("Cannot continue in this mode until required binaries/models are available.")
+            sys.exit(1)
 
     server_proc = None
     if not args.no_server:

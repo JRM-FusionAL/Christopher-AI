@@ -51,6 +51,9 @@ cmake .. -DGGML_CUDA=ON && make -j4
 # Piper TTS
 pip install piper-tts
 
+# Christopher orchestrator deps
+pip install -r christopher_requirements.txt
+
 # System
 sudo apt install alsa-utils ffmpeg
 ```
