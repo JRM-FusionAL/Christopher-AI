@@ -127,4 +127,4 @@ His son saved me. This project is dedicated to them.
 ## Author
 
 **JRM** — Self-taught developer. Privacy-first AI engineering.
-Building [FusionAL](https://github.com/TangMan69/FusionAL), mcp-consulting-kit, and Christopher from scratch.
+Building [FusionAL](https://github.com/JonathanMelton-FusionAL/FusionAL), mcp-consulting-kit, and Christopher from scratch.
