@@ -2,6 +2,8 @@
 
 **Fully local. Privacy-first. Real-time. Built from source.**
 
+> 🌐 [**fusional.dev**](https://fusional.dev) — Production MCP deployments by the team behind Christopher
+
 Christopher is a fully offline voice AI pipeline running entirely on your hardware.
 No cloud. No API keys. No data leaving your machine.
 You speak — it listens, thinks, and talks back.
@@ -126,5 +128,12 @@ His son saved me. This project is dedicated to them.
 
 ## Author
 
-**JRM** — Self-taught developer. Privacy-first AI engineering.
-Building [FusionAL](https://github.com/JonathanMelton-FusionAL/FusionAL), mcp-consulting-kit, and Christopher from scratch.
+**Jonathan Melton** — Self-taught developer. Privacy-first AI engineering.
+
+**Projects**:
+- [FusionAL](https://gitlab.com/JonathanMelton-FusionAL/FusionAL) — Self-hosted MCP governance gateway
+- [mcp-consulting-kit](https://gitlab.com/JonathanMelton-FusionAL/FusionAL-mcp-consulting-kit) — Production MCP servers
+- [Christopher-AI](https://gitlab.com/JonathanMelton-FusionAL/Christopher-AI) — This project
+
+**Consulting**: [fusional.dev](https://fusional.dev) — Done-for-you MCP governance deployments ($3.5k-9k)  
+**Contact**: [jonathanmelton.fusional@gmail.com](mailto:jonathanmelton.fusional@gmail.com) • [Book Call](https://calendly.com/jonathanmelton004/30min)
