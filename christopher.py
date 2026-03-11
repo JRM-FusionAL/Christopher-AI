@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import re
 import shutil
@@ -107,6 +108,18 @@ LISTEN_SECONDS    = int(ENV.get("LISTEN_SECONDS", "5"))
 PULSE_SERVER = os.environ.get("PULSE_SERVER", "tcp:172.24.128.1:4713")
 PULSE_ENV    = {**os.environ, "PULSE_SERVER": PULSE_SERVER}
 
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+_LOG_FILE = Path(__file__).parent / "christopher.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[
+        logging.FileHandler(_LOG_FILE, encoding="utf-8"),
+    ],
+)
+log = logging.getLogger("christopher")
+
 # ── System Prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are Christopher, a local AI assistant. Be brief and direct.
@@ -116,15 +129,19 @@ RULES:
 - Never explain your capabilities unless asked
 - Never repeat TOOL_CALL lines in your final response to the user
 - No bullet points, no markdown, no lists
+- Output ONLY the TOOL_CALL line, then STOP. Never write "Tool result:" yourself.
 
-TOOLS — use when the task requires it, output on its own line:
+TOOLS — use when the task requires it, output on its own line, then stop:
 TOOL_CALL: {"tool": "tool_name", "params": {"key": "value"}}
 
-nl_query       - query a database in plain english. params: query, schema_hint(optional)
-scrape_article - extract article text from a URL. params: url
-scrape_links   - extract links from a page. params: url
-parse_rss      - parse an RSS feed. params: url, limit(optional, default 10)
-slack_send     - send a slack message. params: channel, text
+nl_query            - query a SQL database only. params: query, schema_hint(optional)
+                      Use ONLY for business data, metrics, revenue. NOT for web content.
+scrape_article      - extract article text from a URL. params: url
+scrape_links        - extract all links from a page. params: url
+parse_rss           - fetch headlines from any RSS feed. params: url, limit(optional)
+                      Hacker News: https://news.ycombinator.com/rss
+                      Reddit: https://www.reddit.com/r/SUBREDDIT/.rss
+slack_send          - send a slack message. params: channel, text
 github_create_issue - create github issue. params: owner, repo, title, body(optional)
 stripe_customer_lookup - look up stripe customer. params: customer_id
 
@@ -161,6 +178,8 @@ def call_tool(tool_name: str, params: dict) -> str:
             return f"Found {len(links)} links: " + ", ".join(links[:10])
 
         elif tool_name == "parse_rss":
+            if "limit" in params:
+                params["limit"] = int(params["limit"])
             r = requests.post(f"{CONTENT_URL}/rss/parse", json=params, headers=headers, timeout=30)
             r.raise_for_status()
             data = r.json()
@@ -192,8 +211,10 @@ def call_tool(tool_name: str, params: dict) -> str:
             return f"Unknown tool: {tool_name}"
 
     except requests.exceptions.ConnectionError:
+        log.error("tool=%s connection_error FusionAL server not reachable", tool_name)
         return "Tool error: FusionAL server not reachable. Is docker compose running?"
     except Exception as e:
+        log.error("tool=%s error=%s", tool_name, e)
         return f"Tool error: {e}"
 
 
@@ -259,7 +280,7 @@ def chat_completion(messages: list, max_tokens=300) -> str:
         "max_tokens": max_tokens,
         "temperature": 0.7,
         "top_p": 0.9,
-        "stop": ["</s>", "[INST]", "User:", "You:"],
+        "stop": ["</s>", "[INST]", "User:", "You:", "Tool result:", "TOOL_RESULT:"],
     }
     try:
         r = requests.post(
@@ -274,7 +295,7 @@ def chat_completion(messages: list, max_tokens=300) -> str:
 
 
 def parse_tool_call(text: str):
-    match = re.search(r'TOOL_CALL:\s*(\{.*?\})', text, re.DOTALL)
+    match = re.search(r'TOOL_CALL:\s*(\{.*\})', text, re.DOTALL | re.IGNORECASE)
     if match:
         try:
             data = json.loads(match.group(1))
@@ -291,7 +312,9 @@ def run_turn(messages: list, user_input: str, voice_mode: bool) -> str:
 
     if tool_name:
         print(f"🔧 Tool call: {tool_name}({json.dumps(tool_params)})")
+        log.info("tool_call tool=%s params=%s", tool_name, json.dumps(tool_params))
         tool_result = call_tool(tool_name, tool_params)
+        log.info("tool_result tool=%s result_len=%d", tool_name, len(tool_result))
         print(f"📦 Result: {tool_result[:200]}{'...' if len(tool_result) > 200 else ''}")
         messages.append({"role": "assistant", "content": response})
         messages.append({
@@ -447,6 +470,7 @@ def main():
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     tmpdir   = tempfile.mkdtemp(prefix="christopher-")
 
+    log.info("startup mode=%s model=%s ngl=%s", 'voice' if voice_mode else 'chat', os.path.basename(LLAMA_MODEL), LLAMA_NGL)
     print("💬 Christopher is ready. Type 'quit' to exit.\n")
 
     try:
@@ -456,6 +480,7 @@ def main():
                 if not user_input:
                     print("⚠️  No speech detected")
                     continue
+                log.info("speech transcript=%r", user_input)
                 print(f"👤 You: {user_input}")
             else:
                 try:
@@ -469,6 +494,7 @@ def main():
                     break
 
             response = run_turn(messages, user_input, voice_mode)
+            log.info("response len=%d", len(response))
             print(f"🤖 Christopher: {response}\n")
 
             if voice_mode:
@@ -478,6 +504,7 @@ def main():
                 messages = [messages[0]] + messages[-10:]
 
     except KeyboardInterrupt:
+        log.info("shutdown keyboard_interrupt")
         print("\n\nShutting down...")
     finally:
         import shutil
