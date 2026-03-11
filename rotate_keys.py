@@ -48,11 +48,8 @@ if MCP_KIT:
 if FUSIONAL:
     ENV_FILES.append(FUSIONAL / "core" / ".env")
 
-# Christopher .env — WSL on Windows, direct path on Linux/Mac
-if IS_WINDOWS:
-    CHRISTOPHER_ENV = Path("//wsl.localhost/Ubuntu/home") / os.environ.get("USER", "oledad") / "voice-ai-local" / ".env"
-else:
-    CHRISTOPHER_ENV = Path.home() / "voice-ai-local" / ".env"
+# Christopher .env — resolved relative to this script's own location
+CHRISTOPHER_ENV = Path(__file__).resolve().parent / ".env"
 
 
 def generate_key() -> str:
