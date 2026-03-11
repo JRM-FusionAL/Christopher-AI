@@ -13,7 +13,7 @@
 :*:;;content::http://localhost:8103
 :*:;;fusional::http://localhost:8009
 :*:;;llama::http://localhost:8080
-:*:;;cd1::cd /home/oledad/voice-ai-local
+:*:;;cd1::cd ~/Projects/Christopher-AI
 :*:;;cd2::cd /mnt/c/Users/puddi/Projects/mcp-consulting-kit
 :*:;;cd3::cd /mnt/c/Users/puddi/Projects/FusionAL
 
@@ -21,7 +21,7 @@
 
 ; Ctrl+Alt+C = start Christopher chat mode
 ^!c:: {
-    cmd := "python3 /home/oledad/voice-ai-local/christopher.py --chat --no-server"
+    cmd := "python3 ~/Projects/Christopher-AI/christopher.py --chat --no-server"
     A_Clipboard := cmd
     Send "^v"
 }
