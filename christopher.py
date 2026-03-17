@@ -378,7 +378,8 @@ def listen(tmpdir: str) -> str:
 
     txt_file = transcript_base + ".txt"
     if os.path.exists(txt_file):
-        return open(txt_file).read().strip()
+        with open(txt_file, encoding="utf-8") as fh:
+            return fh.read().strip()
     return ""
 
 
