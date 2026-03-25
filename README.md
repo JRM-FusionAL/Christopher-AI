@@ -1,4 +1,4 @@
-﻿# Christopher — Local Voice AI Assistant
+# Christopher — Local Voice AI Assistant
 
 **Fully local. Privacy-first. Real-time. Built from source.**
 

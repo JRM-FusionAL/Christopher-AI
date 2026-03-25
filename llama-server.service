@@ -1,4 +1,4 @@
-﻿# llama-server.service — Persistent LLM inference backend for Christopher
+# llama-server.service — Persistent LLM inference backend for Christopher
 #
 # Install on t3610:
 #   sudo cp llama-server.service /etc/systemd/system/
