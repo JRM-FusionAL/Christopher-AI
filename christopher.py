@@ -31,6 +31,44 @@ from dotenv import dotenv_values
 
 ENV = dotenv_values(Path(__file__).parent / ".env")
 
+MODEL_PROFILES = {
+    "llama32-3b": {
+        "label": "Llama 3.2 3B Instruct Q4_K_M",
+        "default_ngl": 99,
+        "default_ctx": 2048,
+        "candidates": [
+            ENV.get("LLAMA_MODEL_LLAMA32_3B", ""),
+            "~/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            "/home/oledad/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+            "/data/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+        ],
+    },
+    "qwen25-3b": {
+        "label": "Qwen2.5 3B Instruct Q4_K_M",
+        "default_ngl": 99,
+        "default_ctx": 2048,
+        "candidates": [
+            ENV.get("LLAMA_MODEL_QWEN25_3B", ""),
+            "~/llama.cpp/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+            "/home/oledad/llama.cpp/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+            "/data/models/Qwen2.5-3B-Instruct-Q4_K_M.gguf",
+        ],
+    },
+    "mistral-7b": {
+        "label": "Mistral 7B Instruct v0.2 Q4_K_M",
+        "default_ngl": 28,
+        "default_ctx": 512,
+        "candidates": [
+            ENV.get("LLAMA_MODEL_MISTRAL_7B", ""),
+            "~/llama.cpp/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+            "/home/oledad/llama.cpp/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+            "/data/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+        ],
+    },
+}
+
+DEFAULT_MODEL_PROFILE = ENV.get("MODEL_PROFILE", "llama32-3b")
+
 
 def _expand(path: str) -> str:
     return os.path.expanduser(os.path.expandvars(path))
@@ -56,22 +94,28 @@ def _which_any(candidates: list[str], fallback: str = "") -> str:
             return found
     return fallback
 
+
+def _resolve_model_path(profile: str, explicit_path: str = "") -> str:
+    profile_data = MODEL_PROFILES.get(profile, MODEL_PROFILES[DEFAULT_MODEL_PROFILE])
+    return _first_existing_path([explicit_path, *profile_data["candidates"]])
+
+
+def _profile_default(profile: str, key: str) -> int:
+    profile_data = MODEL_PROFILES.get(profile, MODEL_PROFILES[DEFAULT_MODEL_PROFILE])
+    return int(profile_data[key])
+
 LLAMA_SERVER_BIN  = _first_existing_path([
     ENV.get("LLAMA_SERVER_BIN", ""),
     "~/llama.cpp/build/bin/llama-server",
     "~/llama.cpp/build/bin/llama-server.exe",
     "/home/oledad/llama.cpp/build/bin/llama-server",
 ])
-LLAMA_MODEL       = _first_existing_path([
-    ENV.get("LLAMA_MODEL", ""),
-    "~/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-    "~/llama.cpp/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
-    "/home/oledad/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf",
-])
+CURRENT_MODEL_PROFILE = DEFAULT_MODEL_PROFILE
+LLAMA_MODEL       = _resolve_model_path(CURRENT_MODEL_PROFILE, ENV.get("LLAMA_MODEL", ""))
 LLAMA_SERVER_URL  = ENV.get("LLAMA_SERVER_URL", "http://localhost:8080")
-LLAMA_NGL         = int(ENV.get("LLAMA_NGL", "99"))
+LLAMA_NGL         = int(ENV.get("LLAMA_NGL", str(_profile_default(CURRENT_MODEL_PROFILE, "default_ngl"))))
 LLAMA_THREADS     = int(ENV.get("LLAMA_THREADS", "4"))
-LLAMA_CTX         = int(ENV.get("LLAMA_CTX", "2048"))
+LLAMA_CTX         = int(ENV.get("LLAMA_CTX", str(_profile_default(CURRENT_MODEL_PROFILE, "default_ctx"))))
 
 WHISPER_BIN       = _first_existing_path([
     ENV.get("WHISPER_BIN", ""),
@@ -250,6 +294,41 @@ def start_llama_server():
     ]
     print(f"🚀 Starting llama-server (ngl={LLAMA_NGL}, ctx={LLAMA_CTX})...")
     return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def configure_model_runtime(profile: str, model_path: str = "", ngl: int | None = None, ctx: int | None = None):
+    global CURRENT_MODEL_PROFILE, LLAMA_MODEL, LLAMA_NGL, LLAMA_CTX
+
+    if profile not in MODEL_PROFILES:
+        raise ValueError(f"Unknown model profile: {profile}")
+
+    CURRENT_MODEL_PROFILE = profile
+    LLAMA_MODEL = _resolve_model_path(profile, model_path or ENV.get("LLAMA_MODEL", ""))
+    LLAMA_NGL = int(ngl if ngl is not None else ENV.get("LLAMA_NGL", str(_profile_default(profile, "default_ngl"))))
+    LLAMA_CTX = int(ctx if ctx is not None else ENV.get("LLAMA_CTX", str(_profile_default(profile, "default_ctx"))))
+
+
+def run_benchmark(prompt: str, runs: int):
+    latencies = []
+    print(f"🧪 Benchmarking profile={CURRENT_MODEL_PROFILE} model={os.path.basename(LLAMA_MODEL)}")
+    print(f"   prompt={prompt!r}")
+
+    for index in range(1, runs + 1):
+        messages = [
+            {"role": "system", "content": "You are Christopher. Be brief and direct."},
+            {"role": "user", "content": prompt},
+        ]
+        started = time.perf_counter()
+        response = chat_completion(messages, max_tokens=120)
+        elapsed = time.perf_counter() - started
+        latencies.append(elapsed)
+        print(f"Run {index}: {elapsed:.2f}s | {response[:120]}")
+
+    average = sum(latencies) / len(latencies)
+    fastest = min(latencies)
+    slowest = max(latencies)
+    print()
+    print(f"Average: {average:.2f}s | Fastest: {fastest:.2f}s | Slowest: {slowest:.2f}s")
 
 
 def validate_runtime(voice_mode: bool, skip_server_start: bool) -> list[str]:
@@ -435,14 +514,32 @@ def main():
     parser.add_argument("--chat",      action="store_true", help="Text chat mode (no mic/TTS)")
     parser.add_argument("--voice",     action="store_true", help="Full voice mode (default)")
     parser.add_argument("--no-server", action="store_true", help="Skip llama-server launch (already running)")
+    parser.add_argument("--model-profile", choices=sorted(MODEL_PROFILES.keys()), default=DEFAULT_MODEL_PROFILE,
+                        help="Select a predefined local model profile")
+    parser.add_argument("--model-path", help="Override GGUF model path for this run")
+    parser.add_argument("--ngl", type=int, help="Override GPU layers for this run")
+    parser.add_argument("--ctx", type=int, help="Override context window for this run")
+    parser.add_argument("--benchmark", action="store_true", help="Run latency benchmark instead of interactive chat")
+    parser.add_argument("--benchmark-runs", type=int, default=3, help="Number of benchmark runs")
+    parser.add_argument("--benchmark-prompt", default="In one sentence, summarize why local-first AI can be useful.",
+                        help="Prompt to use during benchmark mode")
     args = parser.parse_args()
 
-    voice_mode = not args.chat
+    configure_model_runtime(
+        profile=args.model_profile,
+        model_path=args.model_path or "",
+        ngl=args.ngl,
+        ctx=args.ctx,
+    )
+
+    voice_mode = not args.chat and not args.benchmark
 
     print("=" * 55)
     print("  Christopher — Local AI")
-    print(f"  Mode: {'VOICE' if voice_mode else 'TEXT CHAT'}")
-    print(f"  Model: {os.path.basename(LLAMA_MODEL)} | GPU layers: {LLAMA_NGL}")
+    mode_label = "BENCHMARK" if args.benchmark else ("VOICE" if voice_mode else "TEXT CHAT")
+    print(f"  Mode: {mode_label}")
+    print(f"  Profile: {CURRENT_MODEL_PROFILE} ({MODEL_PROFILES[CURRENT_MODEL_PROFILE]['label']})")
+    print(f"  Model: {os.path.basename(LLAMA_MODEL)} | GPU layers: {LLAMA_NGL} | ctx: {LLAMA_CTX}")
     print(f"  FusionAL: {BI_URL} / {API_URL} / {CONTENT_URL}")
     if voice_mode:
         print(f"  PulseAudio: {PULSE_SERVER}")
@@ -467,6 +564,14 @@ def main():
             sys.exit(1)
     else:
         print("⚡ Using existing llama-server")
+
+    if args.benchmark:
+        run_benchmark(args.benchmark_prompt, args.benchmark_runs)
+        if server_proc:
+            print("Stopping llama-server...")
+            server_proc.terminate()
+            server_proc.wait()
+        return
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     tmpdir   = tempfile.mkdtemp(prefix="christopher-")

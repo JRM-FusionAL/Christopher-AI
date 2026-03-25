@@ -1,4 +1,4 @@
-# llama-server.service — Persistent LLM inference backend for Christopher
+﻿# llama-server.service — Persistent LLM inference backend for Christopher
 #
 # Install on t3610:
 #   sudo cp llama-server.service /etc/systemd/system/
@@ -16,7 +16,7 @@
 [Unit]
 Description=llama-server — Local LLM inference for Christopher AI
 After=network.target
-Documentation=https://gitlab.com/JonathanMelton-FusionAL/Christopher-AI
+Documentation=https://gitlab.com/JRM-FusionAL/Christopher-AI
 
 [Service]
 Type=simple
@@ -46,3 +46,4 @@ SyslogIdentifier=llama-server
 
 [Install]
 WantedBy=multi-user.target
+

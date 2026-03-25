@@ -92,12 +92,16 @@ if [ ! -f "$SCRIPT_DIR/.env" ]; then
     echo ""
     echo "▶ Creating .env..."
     cat > "$SCRIPT_DIR/.env" << EOF
+MODEL_PROFILE=llama32-3b
 LLAMA_SERVER_BIN=$HOME/llama.cpp/build/bin/llama-server
-LLAMA_MODEL=$HOME/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+LLAMA_MODEL=
+LLAMA_MODEL_LLAMA32_3B=$HOME/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+LLAMA_MODEL_QWEN25_3B=
+LLAMA_MODEL_MISTRAL_7B=
 LLAMA_SERVER_URL=http://localhost:8080
-LLAMA_NGL=99
+LLAMA_NGL=
 LLAMA_THREADS=4
-LLAMA_CTX=2048
+LLAMA_CTX=
 
 WHISPER_BIN=$HOME/whisper.cpp/build/bin/whisper-cli
 WHISPER_MODEL=$HOME/whisper.cpp/models/ggml-base.en.bin
@@ -149,6 +153,7 @@ echo ""
 echo "Run Christopher (llama-server already running):"
 echo "  python3 christopher.py --chat --no-server   # text mode"
 echo "  python3 christopher.py --voice --no-server  # voice mode"
+echo "  python3 christopher.py --benchmark --no-server --model-profile llama32-3b"
 echo ""
 echo "Or let Christopher manage llama-server itself:"
 echo "  python3 christopher.py --chat               # starts llama-server automatically"
