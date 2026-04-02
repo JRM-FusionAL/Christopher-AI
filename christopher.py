@@ -145,6 +145,9 @@ FUSIONAL_API_KEY  = ENV.get("FUSIONAL_API_KEY", "")
 BI_URL            = ENV.get("FUSIONAL_BI_URL", "http://localhost:8101")
 API_URL           = ENV.get("FUSIONAL_API_URL", "http://localhost:8102")
 CONTENT_URL       = ENV.get("FUSIONAL_CONTENT_URL", "http://localhost:8103")
+KNOWLEDGE_BASE_ROOT = ENV.get("KNOWLEDGE_BASE_ROOT", "C:/Users/puddi/Projects/fusional-knowledge-base")
+KB_MAX_TOTAL_CHARS = int(ENV.get("KB_MAX_TOTAL_CHARS", "2800"))
+KB_MAX_FILE_CHARS = int(ENV.get("KB_MAX_FILE_CHARS", "1400"))
 
 LISTEN_SECONDS    = int(ENV.get("LISTEN_SECONDS", "5"))
 
@@ -191,6 +194,53 @@ stripe_customer_lookup - look up stripe customer. params: customer_id
 
 After a tool runs you will receive: Tool result: <data>
 Summarize the result naturally in 1-2 sentences. Do not show raw data."""
+
+
+def load_knowledge_context(kb_root_override: str = "") -> tuple[str, list[str]]:
+    kb_root_raw = kb_root_override.strip() if kb_root_override else str(KNOWLEDGE_BASE_ROOT or "")
+    if not kb_root_raw:
+        return "", []
+
+    kb_root = Path(_expand(kb_root_raw))
+    files = [
+        kb_root / "00-CURRENT-STATUS" / "STATUS.md",
+        kb_root / "00-CURRENT-STATUS" / "PRIORITIES.md",
+    ]
+
+    loaded_files = []
+    sections = []
+    current_total = 0
+    for file_path in files:
+        if not file_path.exists():
+            continue
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="ignore").strip()
+            if not text:
+                continue
+            compact_lines = [line.strip() for line in text.splitlines() if line.strip()]
+            compact_text = "\n".join(compact_lines)
+            compact_text = compact_text[:KB_MAX_FILE_CHARS]
+            section = f"# {file_path.name}\n{compact_text}"
+            projected_total = current_total + len(section) + 2
+            if projected_total > KB_MAX_TOTAL_CHARS:
+                remaining = max(0, KB_MAX_TOTAL_CHARS - current_total - 2)
+                if remaining <= 0:
+                    break
+                section = section[:remaining]
+                sections.append(section)
+                loaded_files.append(str(file_path))
+                break
+
+            loaded_files.append(str(file_path))
+            sections.append(section)
+            current_total += len(section) + 2
+        except Exception:
+            continue
+
+    if not sections:
+        return "", loaded_files
+
+    return "\n\n".join(sections), loaded_files
 
 
 # ── Tool Router ───────────────────────────────────────────────────────────────
@@ -279,6 +329,14 @@ def wait_for_server(timeout=60):
         time.sleep(2)
     print(" TIMEOUT")
     return False
+
+
+def is_server_reachable(timeout=3) -> bool:
+    try:
+        r = requests.get(f"{LLAMA_SERVER_URL}/health", timeout=timeout)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 
 def start_llama_server():
@@ -523,6 +581,8 @@ def main():
     parser.add_argument("--benchmark-runs", type=int, default=3, help="Number of benchmark runs")
     parser.add_argument("--benchmark-prompt", default="In one sentence, summarize why local-first AI can be useful.",
                         help="Prompt to use during benchmark mode")
+    parser.add_argument("--no-kb", action="store_true", help="Disable fusional-knowledge-base bootstrap context")
+    parser.add_argument("--kb-root", default="", help="Override knowledge-base root path for this run")
     args = parser.parse_args()
 
     configure_model_runtime(
@@ -541,10 +601,20 @@ def main():
     print(f"  Profile: {CURRENT_MODEL_PROFILE} ({MODEL_PROFILES[CURRENT_MODEL_PROFILE]['label']})")
     print(f"  Model: {os.path.basename(LLAMA_MODEL)} | GPU layers: {LLAMA_NGL} | ctx: {LLAMA_CTX}")
     print(f"  FusionAL: {BI_URL} / {API_URL} / {CONTENT_URL}")
+    kb_context = ""
+    kb_files_loaded = []
+    if not args.no_kb:
+        kb_context, kb_files_loaded = load_knowledge_context(kb_root_override=args.kb_root)
+    print(f"  KB context: {'loaded' if kb_context else 'not loaded'}")
     if voice_mode:
         print(f"  PulseAudio: {PULSE_SERVER}")
     print("=" * 55)
     print()
+
+    if (not args.no_server) and is_server_reachable(timeout=2):
+        if not Path(LLAMA_SERVER_BIN).exists() or not Path(LLAMA_MODEL).exists():
+            print(f"⚡ Detected reachable llama-server at {LLAMA_SERVER_URL}; using existing server mode.")
+            args.no_server = True
 
     preflight_issues = validate_runtime(voice_mode=voice_mode, skip_server_start=args.no_server)
     if preflight_issues:
@@ -574,6 +644,16 @@ def main():
         return
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if kb_context:
+        kb_system_message = (
+            "Use this project knowledge-base context as high-priority background facts. "
+            "If user asks about current priorities/status, prefer this context over stale assumptions.\n\n"
+            f"{kb_context}"
+        )
+        messages.append({"role": "system", "content": kb_system_message})
+        log.info("kb_context_loaded files=%s", ";".join(kb_files_loaded))
+    else:
+        log.info("kb_context_loaded files=none")
     tmpdir   = tempfile.mkdtemp(prefix="christopher-")
 
     log.info("startup mode=%s model=%s ngl=%s", 'voice' if voice_mode else 'chat', os.path.basename(LLAMA_MODEL), LLAMA_NGL)
