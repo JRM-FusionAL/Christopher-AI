@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(git:*)",
-      "Bash(wait)"
+      "Bash(wait)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('christopher.py', encoding='utf-8'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "WebSearch"
     ]
   }
 }

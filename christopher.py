@@ -6,10 +6,12 @@ Connects whisper.cpp ASR + llama-server LLM + Piper TTS + FusionAL MCP tools
 Modes:
   --chat   : text input/output (no mic, no TTS)
   --voice  : full voice pipeline (default)
+  --server : OpenAI-compatible HTTP server for OpenClaw/Telegram integration
 
 Usage:
   python3 christopher.py --chat
   python3 christopher.py --voice
+  python3 christopher.py --server --server-port 8090
 """
 
 import argparse
@@ -27,7 +29,16 @@ import requests
 import scipy.io.wavfile as wavfile
 from pathlib import Path
 from dotenv import dotenv_values
-import fcntl
+if sys.platform != "win32":
+    import fcntl
+
+try:
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+    import uvicorn
+    _FASTAPI_AVAILABLE = True
+except ImportError:
+    _FASTAPI_AVAILABLE = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -170,9 +181,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Then add logging throughout:
-logger.info(f"Starting llama-server on port {self.port}")
-logger.error(f"Tool call failed: {response.status_code}")
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
 
@@ -266,8 +274,8 @@ def load_knowledge_context(kb_root_override: str = "") -> tuple[str, list[str]]:
                 sections.append(section)
                 current_total += len(section) + 2
 
-            except json.JSONDecodeError as e:
-                logger.warning(f"KB file {file_path} has invalid JSON: {e}")
+            except UnicodeDecodeError as e:
+                logger.warning(f"KB file {file_path} has invalid encoding: {e}")
             except Exception as e:
                 logger.error(f"Failed to load KB file {file_path}: {e}")
 
@@ -382,14 +390,18 @@ def is_server_reachable(timeout=3) -> bool:
 
 
 def start_llama_server():
+    from urllib.parse import urlparse
+    parsed = urlparse(LLAMA_SERVER_URL)
+    server_host = parsed.hostname or "127.0.0.1"
+    server_port = str(parsed.port or 8080)
     cmd = [
         LLAMA_SERVER_BIN,
         "-m", LLAMA_MODEL,
         "-ngl", str(LLAMA_NGL),
         "-t", str(LLAMA_THREADS),
         "-c", str(LLAMA_CTX),
-        "--host", "127.0.0.1",
-        "--port", "8080",
+        "--host", server_host,
+        "--port", server_port,
         "--log-disable",
     ]
     print(f"🚀 Starting llama-server (ngl={LLAMA_NGL}, ctx={LLAMA_CTX})...")
@@ -679,14 +691,21 @@ def speak(text: str) -> None:
         if "paplay" in str(e):
             logger.info("Attempting ffplay fallback")
             try:
-                subprocess.run(
-                    [PIPER_BIN, "-m", PIPER_MODEL, "-q"],
-                    input=text.encode("utf-8"),
+                piper_fb = subprocess.Popen(
+                    [PIPER_BIN, "-m", PIPER_MODEL, "-q", "--output-raw"],
+                    stdin=subprocess.PIPE,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
-                    timeout=30,
-                    check=False
                 )
+                ffplay_fb = subprocess.Popen(
+                    ["ffplay", "-autoexit", "-nodisp", "-f", "s16le", "-ar", "22050", "-ac", "1", "-i", "pipe:0"],
+                    stdin=piper_fb.stdout,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                piper_fb.stdin.write(text.encode("utf-8"))
+                piper_fb.stdin.close()
+                ffplay_fb.wait(timeout=30)
             except Exception as fallback_e:
                 logger.error(f"ffplay fallback also failed: {fallback_e}")
 
@@ -694,6 +713,78 @@ def speak(text: str) -> None:
         logger.warning("Broken pipe during audio playback - Piper or paplay terminated unexpectedly")
     except Exception as e:
         logger.error(f"Audio synthesis failed: {e}")
+
+
+# ── Server Mode ───────────────────────────────────────────────────────────────
+
+def _server_turn(messages: list) -> str:
+    """Stateless single-turn handler for server mode.
+    Expects the user message to already be the last entry in messages.
+    Handles tool calling internally and returns the final assistant response.
+    """
+    response = chat_completion(messages)
+    tool_name, tool_params = parse_tool_call(response)
+
+    if tool_name:
+        logger.info(f"server tool_call tool={tool_name} params={json.dumps(tool_params)}")
+        tool_result = call_tool(tool_name, tool_params)
+        logger.info(f"server tool_result tool={tool_name} result_len={len(tool_result)}")
+        follow_up = messages + [
+            {"role": "assistant", "content": response},
+            {"role": "user", "content": f"Tool result: {tool_result}\n\nNow summarize this result naturally."},
+        ]
+        return chat_completion(follow_up, max_tokens=200)
+
+    return response
+
+
+def build_server_app(kb_context: str) -> "FastAPI":
+    app = FastAPI(title="Christopher", version="1.0")
+
+    base_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if kb_context:
+        base_messages.append({
+            "role": "system",
+            "content": (
+                "Use this project knowledge-base context as high-priority background facts. "
+                "If user asks about current priorities/status, prefer this context over stale assumptions.\n\n"
+                f"{kb_context}"
+            ),
+        })
+
+    @app.get("/health")
+    async def health():
+        reachable = is_server_reachable()
+        return JSONResponse({"status": "ok" if reachable else "degraded", "llm": reachable})
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request):
+        body = await request.json()
+        incoming = body.get("messages", [])
+
+        # Strip any system messages from the client — we own the system prompt
+        user_turns = [m for m in incoming if m.get("role") != "system"]
+        # Cap history to last 6 turns so base_messages + history stays within LLAMA_CTX
+        user_turns = user_turns[-6:]
+        messages = base_messages + user_turns
+
+        response_text = _server_turn(messages)
+        logger.info(f"server response len={len(response_text)}")
+
+        return {
+            "id": f"chatcmpl-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": os.path.basename(LLAMA_MODEL),
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": response_text},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+
+    return app
 
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────
@@ -714,6 +805,8 @@ def main():
                         help="Prompt to use during benchmark mode")
     parser.add_argument("--no-kb", action="store_true", help="Disable fusional-knowledge-base bootstrap context")
     parser.add_argument("--kb-root", default="", help="Override knowledge-base root path for this run")
+    parser.add_argument("--server", action="store_true", help="Run as OpenAI-compatible HTTP server (for OpenClaw/Telegram)")
+    parser.add_argument("--server-port", type=int, default=8090, help="Port for server mode (default: 8090)")
     args = parser.parse_args()
 
     configure_model_runtime(
@@ -723,11 +816,11 @@ def main():
         ctx=args.ctx,
     )
 
-    voice_mode = not args.chat and not args.benchmark
+    voice_mode = not args.chat and not args.benchmark and not args.server
 
     print("=" * 55)
     print("  Christopher — Local AI")
-    mode_label = "BENCHMARK" if args.benchmark else ("VOICE" if voice_mode else "TEXT CHAT")
+    mode_label = "BENCHMARK" if args.benchmark else ("SERVER" if args.server else ("VOICE" if voice_mode else "TEXT CHAT"))
     print(f"  Mode: {mode_label}")
     print(f"  Profile: {CURRENT_MODEL_PROFILE} ({MODEL_PROFILES[CURRENT_MODEL_PROFILE]['label']})")
     print(f"  Model: {os.path.basename(LLAMA_MODEL)} | GPU layers: {LLAMA_NGL} | ctx: {LLAMA_CTX}")
@@ -739,6 +832,8 @@ def main():
     print(f"  KB context: {'loaded' if kb_context else 'not loaded'}")
     if voice_mode:
         print(f"  PulseAudio: {PULSE_SERVER}")
+    if args.server:
+        print(f"  Server: http://0.0.0.0:{args.server_port}/v1")
     print("=" * 55)
     print()
 
@@ -772,6 +867,22 @@ def main():
             print("Stopping llama-server...")
             server_proc.terminate()
             server_proc.wait()
+        return
+
+    if args.server:
+        if not _FASTAPI_AVAILABLE:
+            print("❌ fastapi/uvicorn not installed. Run: pip install fastapi uvicorn")
+            sys.exit(1)
+        logger.info(f"kb_context_loaded files={';'.join(kb_files_loaded)}" if kb_context else "kb_context_loaded files=none")
+        app = build_server_app(kb_context)
+        print(f"🦞 Christopher server ready — OpenClaw baseUrl: http://<host>:{args.server_port}/v1")
+        try:
+            uvicorn.run(app, host="0.0.0.0", port=args.server_port, log_level="warning")
+        finally:
+            if server_proc:
+                print("Stopping llama-server...")
+                server_proc.terminate()
+                server_proc.wait()
         return
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
@@ -818,13 +929,14 @@ def main():
                 speak(response)
 
             if len(messages) > 20:
-                messages = [messages[0]] + messages[-10:]
+                # Keep system prompt + optional KB context (first 2) + last 10 turns
+                head = messages[:2] if len(messages) > 1 and messages[1].get("role") == "system" else messages[:1]
+                messages = head + messages[-10:]
 
     except KeyboardInterrupt:
         logger.info("shutdown keyboard_interrupt")
         print("\n\nShutting down...")
     finally:
-        import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
         if server_proc:
             print("Stopping llama-server...")
