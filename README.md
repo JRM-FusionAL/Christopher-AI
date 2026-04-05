@@ -36,7 +36,27 @@ One bash script. Three binaries. Zero cloud dependencies.
 
 ---
 
-## Requirements
+## Quick Start (Pilot Installer)
+
+Single command — checks all prerequisites first, then builds and downloads everything:
+
+```bash
+bash pilot_install.sh
+```
+
+After install, run the health check and launch Christopher:
+
+```bash
+bash preflight_voice.sh       # verify the pipeline is ready
+python3 christopher.py --voice  # start voice mode
+```
+
+> See **[docs/pilot-setup-guide.md](docs/pilot-setup-guide.md)** for supported host
+> configurations, failure recovery, and full walkthrough.
+
+---
+
+## Manual Requirements
 ```bash
 # whisper.cpp
 git clone https://github.com/ggerganov/whisper.cpp
