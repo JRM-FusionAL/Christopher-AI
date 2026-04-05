@@ -6,10 +6,12 @@ Connects whisper.cpp ASR + llama-server LLM + Piper TTS + FusionAL MCP tools
 Modes:
   --chat   : text input/output (no mic, no TTS)
   --voice  : full voice pipeline (default)
+  --server : OpenAI-compatible HTTP server for OpenClaw/Telegram integration
 
 Usage:
   python3 christopher.py --chat
   python3 christopher.py --voice
+  python3 christopher.py --server --server-port 8090
 """
 
 import argparse
@@ -24,8 +26,19 @@ import tempfile
 import time
 import threading
 import requests
+import scipy.io.wavfile as wavfile
 from pathlib import Path
 from dotenv import dotenv_values
+if sys.platform != "win32":
+    import fcntl
+
+try:
+    from fastapi import FastAPI, Request
+    from fastapi.responses import JSONResponse
+    import uvicorn
+    _FASTAPI_AVAILABLE = True
+except ImportError:
+    _FASTAPI_AVAILABLE = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -160,12 +173,14 @@ PULSE_ENV    = {**os.environ, "PULSE_SERVER": PULSE_SERVER}
 _LOG_FILE = Path(__file__).parent / "christopher.log"
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(_LOG_FILE, encoding="utf-8"),
-    ],
+        logging.StreamHandler()
+    ]
 )
-log = logging.getLogger("christopher")
+logger = logging.getLogger(__name__)
+
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
 
@@ -197,50 +212,85 @@ Summarize the result naturally in 1-2 sentences. Do not show raw data."""
 
 
 def load_knowledge_context(kb_root_override: str = "") -> tuple[str, list[str]]:
-    kb_root_raw = kb_root_override.strip() if kb_root_override else str(KNOWLEDGE_BASE_ROOT or "")
-    if not kb_root_raw:
-        return "", []
+    """Load and compact FusionAL status/priorities within char limits.
 
-    kb_root = Path(_expand(kb_root_raw))
-    files = [
-        kb_root / "00-CURRENT-STATUS" / "STATUS.md",
-        kb_root / "00-CURRENT-STATUS" / "PRIORITIES.md",
-    ]
+    Returns: (context_text, loaded_files_list)
+    """
+    _kb_cache = {}
+    _kb_cache_time = getattr(load_knowledge_context, '_cache_time', 0)
 
-    loaded_files = []
-    sections = []
-    current_total = 0
-    for file_path in files:
-        if not file_path.exists():
-            continue
-        try:
-            text = file_path.read_text(encoding="utf-8", errors="ignore").strip()
-            if not text:
+    if time.time() - _kb_cache_time > 300:  # 5 min cache
+        kb_root_raw = kb_root_override or str(KNOWLEDGE_BASE_ROOT or "")
+
+        if not kb_root_raw:
+            logger.warning("Knowledge base root not configured")
+            return "", []
+
+        kb_root = Path(_expand(kb_root_raw))
+        files = [
+            kb_root / "00-CURRENT-STATUS" / "STATUS.md",
+            kb_root / "00-CURRENT-STATUS" / "PRIORITIES.md",
+        ]
+
+        loaded_files = []
+        sections = []
+        current_total = 0
+
+        for file_path in files:
+            if not file_path.exists():
+                logger.debug(f"KB file not found: {file_path}")
                 continue
-            compact_lines = [line.strip() for line in text.splitlines() if line.strip()]
-            compact_text = "\n".join(compact_lines)
-            compact_text = compact_text[:KB_MAX_FILE_CHARS]
-            section = f"# {file_path.name}\n{compact_text}"
-            projected_total = current_total + len(section) + 2
-            if projected_total > KB_MAX_TOTAL_CHARS:
-                remaining = max(0, KB_MAX_TOTAL_CHARS - current_total - 2)
-                if remaining <= 0:
+
+            try:
+                # Acquire file lock for reading (Unix-like systems only; Windows uses OS-level locking)
+                with open(file_path, 'r', encoding="utf-8") as fh:
+                    try:
+                        if sys.platform != "win32":  # Unix-like systems
+                            fcntl.flock(fh.fileno(), fcntl.LOCK_SH)  # Shared lock
+                        status_content = fh.read().strip()
+                        if sys.platform != "win32":
+                            fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                    except (IOError, OSError) as lock_e:
+                        logger.warning(f"Could not lock KB file {file_path}: {lock_e}")
+                        status_content = fh.read().strip()
+
+                if not status_content:
+                    continue
+
+                section = f"# {file_path.name}\n{status_content}"
+                projected_total = current_total + len(section) + 2
+
+                if projected_total > KB_MAX_TOTAL_CHARS:
+                    remaining = max(0, KB_MAX_TOTAL_CHARS - current_total - 2)
+                    if remaining <= 0:
+                        break
+                    section = section[:remaining]
+                    sections.append(section)
+                    loaded_files.append(str(file_path))
+                    logger.info(f"KB truncated at {file_path.name}")
                     break
-                section = section[:remaining]
-                sections.append(section)
+
                 loaded_files.append(str(file_path))
-                break
+                sections.append(section)
+                current_total += len(section) + 2
 
-            loaded_files.append(str(file_path))
-            sections.append(section)
-            current_total += len(section) + 2
-        except Exception:
-            continue
+            except UnicodeDecodeError as e:
+                logger.warning(f"KB file {file_path} has invalid encoding: {e}")
+            except Exception as e:
+                logger.error(f"Failed to load KB file {file_path}: {e}")
 
-    if not sections:
-        return "", loaded_files
+        if sections:
+            _kb_cache['context'] = "\n\n".join(sections)
+            _kb_cache['files'] = loaded_files
+        else:
+            _kb_cache['context'] = ""
+            _kb_cache['files'] = loaded_files
 
-    return "\n\n".join(sections), loaded_files
+        load_knowledge_context._cache_time = time.time()
+        load_knowledge_context._cache = _kb_cache
+
+    cache = getattr(load_knowledge_context, '_cache', _kb_cache)
+    return cache.get('context', ''), cache.get('files', [])
 
 
 # ── Tool Router ───────────────────────────────────────────────────────────────
@@ -305,10 +355,10 @@ def call_tool(tool_name: str, params: dict) -> str:
             return f"Unknown tool: {tool_name}"
 
     except requests.exceptions.ConnectionError:
-        log.error("tool=%s connection_error FusionAL server not reachable", tool_name)
+        logger.error(f"tool={tool_name} connection_error FusionAL server not reachable")
         return "Tool error: FusionAL server not reachable. Is docker compose running?"
     except Exception as e:
-        log.error("tool=%s error=%s", tool_name, e)
+        logger.error(f"tool={tool_name} error={e}")
         return f"Tool error: {e}"
 
 
@@ -340,18 +390,22 @@ def is_server_reachable(timeout=3) -> bool:
 
 
 def start_llama_server():
+    from urllib.parse import urlparse
+    parsed = urlparse(LLAMA_SERVER_URL)
+    server_host = parsed.hostname or "127.0.0.1"
+    server_port = str(parsed.port or 8080)
     cmd = [
         LLAMA_SERVER_BIN,
         "-m", LLAMA_MODEL,
         "-ngl", str(LLAMA_NGL),
         "-t", str(LLAMA_THREADS),
         "-c", str(LLAMA_CTX),
-        "--host", "127.0.0.1",
-        "--port", "8080",
+        "--host", server_host,
+        "--port", server_port,
         "--log-disable",
     ]
     print(f"🚀 Starting llama-server (ngl={LLAMA_NGL}, ctx={LLAMA_CTX})...")
-    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
 
 def configure_model_runtime(profile: str, model_path: str = "", ngl: int | None = None, ctx: int | None = None):
@@ -411,7 +465,7 @@ def validate_runtime(voice_mode: bool, skip_server_start: bool) -> list[str]:
     return problems
 
 
-def chat_completion(messages: list, max_tokens=300) -> str:
+def chat_completion(messages: list, max_tokens: int = 300) -> str:
     payload = {
         "messages": messages,
         "max_tokens": max_tokens,
@@ -419,15 +473,25 @@ def chat_completion(messages: list, max_tokens=300) -> str:
         "top_p": 0.9,
         "stop": ["</s>", "[INST]", "User:", "You:", "Tool result:", "TOOL_RESULT:"],
     }
+    headers = {"Content-Type": "application/json"}
     try:
         r = requests.post(
             f"{LLAMA_SERVER_URL}/v1/chat/completions",
             json=payload,
+            headers=headers,
             timeout=120,
         )
         r.raise_for_status()
+        logger.debug(f"chat_completion tokens={r.json().get('usage', {}).get('completion_tokens', 'unknown')}")
         return r.json()["choices"][0]["message"]["content"].strip()
+    except requests.exceptions.Timeout:
+        logger.error("LLM timeout after 120s")
+        return "LLM error: Request timed out"
+    except requests.exceptions.ConnectionError:
+        logger.error(f"LLM connection failed to {LLAMA_SERVER_URL}")
+        return f"LLM error: Cannot reach {LLAMA_SERVER_URL}"
     except Exception as e:
+        logger.error(f"LLM error: {e}")
         return f"LLM error: {e}"
 
 
@@ -443,15 +507,16 @@ def parse_tool_call(text: str):
 
 
 def run_turn(messages: list, user_input: str, voice_mode: bool) -> str:
+    """Execute one conversation turn: send message, handle tool calling."""
     messages.append({"role": "user", "content": user_input})
     response = chat_completion(messages)
     tool_name, tool_params = parse_tool_call(response)
 
     if tool_name:
         print(f"🔧 Tool call: {tool_name}({json.dumps(tool_params)})")
-        log.info("tool_call tool=%s params=%s", tool_name, json.dumps(tool_params))
+        logger.info(f"tool_call tool={tool_name} params={json.dumps(tool_params)}")
         tool_result = call_tool(tool_name, tool_params)
-        log.info("tool_result tool=%s result_len=%d", tool_name, len(tool_result))
+        logger.info(f"tool_result tool={tool_name} result_len={len(tool_result)}")
         print(f"📦 Result: {tool_result[:200]}{'...' if len(tool_result) > 200 else ''}")
         messages.append({"role": "assistant", "content": response})
         messages.append({
@@ -480,57 +545,117 @@ def listen(tmpdir: str) -> str:
 
     print(f"🔴 Listening {LISTEN_SECONDS}s...", end="", flush=True)
 
-    rec_proc = subprocess.Popen(
-        ["parec", "--format=s16le", "--rate=16000", "--channels=1", raw_file],
-        env=PULSE_ENV,
-        stderr=subprocess.DEVNULL,
-    )
-    time.sleep(LISTEN_SECONDS)
-    rec_proc.terminate()
-    rec_proc.wait()
-    print(" done")
-
-    # Convert raw PCM -> WAV for whisper.cpp — sox first, ffmpeg as fallback
-    conv = subprocess.run(
-        ["sox", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16",
-         "-c", "1", raw_file, audio_file],
-        capture_output=True
-    )
-    if conv.returncode != 0:
-        subprocess.run(
-            ["ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1",
-             "-i", raw_file, audio_file],
-            capture_output=True
+    try:
+        rec_proc = subprocess.Popen(
+            ["parec", "--format=s16le", "--rate=16000", "--channels=1", raw_file],
+            env=PULSE_ENV,
+            stderr=subprocess.DEVNULL,
         )
-
-    if not os.path.exists(audio_file):
+        time.sleep(LISTEN_SECONDS)
+        rec_proc.terminate()
+        try:
+            rec_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            logger.warning("parec did not terminate gracefully, killing")
+            rec_proc.kill()
+            rec_proc.wait()
+        print(" done")
+    except FileNotFoundError:
+        logger.error("parec binary not found - PulseAudio not installed or not in PATH")
+        return ""
+    except Exception as e:
+        logger.error(f"Audio recording failed: {e}")
         return ""
 
-    subprocess.run(
-        [WHISPER_BIN, "-m", WHISPER_MODEL, "-f", audio_file,
-         "--output-txt", "--output-file", transcript_base,
-         "--no-timestamps", "-t", "4"],
-        capture_output=True
-    )
+    if not os.path.exists(raw_file):
+        logger.error("Recording produced no audio file")
+        return ""
+
+    # Convert raw PCM -> WAV for whisper.cpp — sox first, ffmpeg as fallback
+    try:
+        conv = subprocess.run(
+            ["sox", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16",
+             "-c", "1", raw_file, audio_file],
+            capture_output=True,
+            timeout=10
+        )
+        if conv.returncode != 0:
+            logger.debug(f"sox failed ({conv.returncode}), trying ffmpeg")
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1",
+                     "-i", raw_file, audio_file],
+                    capture_output=True,
+                    timeout=10
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                logger.error(f"ffmpeg failed: {e}, cannot convert audio")
+                return ""
+    except subprocess.TimeoutExpired:
+        logger.error("Audio conversion timeout")
+        return ""
+
+    if not os.path.exists(audio_file):
+        logger.error("Audio conversion produced no output file")
+        return ""
+
+    try:
+        proc = subprocess.run(
+            [WHISPER_BIN, "-m", WHISPER_MODEL, "-f", audio_file,
+             "--output-txt", "--output-file", transcript_base,
+             "--no-timestamps", "-t", "4"],
+            capture_output=True,
+            timeout=30
+        )
+        if proc.returncode != 0:
+            logger.warning(f"whisper.cpp exited with code {proc.returncode}")
+            logger.debug(f"whisper stderr: {proc.stderr.decode('utf-8', errors='ignore')[:200]}")
+    except FileNotFoundError:
+        logger.error("whisper-cli binary not found")
+        return ""
+    except subprocess.TimeoutExpired:
+        logger.error("Whisper transcription timed out")
+        return ""
+    except Exception as e:
+        logger.error(f"Transcription failed: {e}")
+        return ""
 
     txt_file = transcript_base + ".txt"
     if os.path.exists(txt_file):
-        with open(txt_file, encoding="utf-8") as fh:
-            return fh.read().strip()
-    return ""
+        try:
+            with open(txt_file, encoding="utf-8") as fh:
+                text = fh.read().strip()
+                logger.debug(f"transcribed {len(text)} chars")
+                return text
+        except Exception as e:
+            logger.error(f"Failed to read transcript: {e}")
+            return ""
+    else:
+        logger.warning("Whisper produced no output")
+        return ""
 
 
-def speak(text: str):
+def speak(text: str) -> None:
     """Synthesize text with Piper and play via paplay (PulseAudio).
     Falls back to ffplay if paplay not available.
     """
+    if not text:
+        logger.warning("speak() called with empty text")
+        return
+
     try:
+        # Check if Piper binary exists before launching
+        if not Path(PIPER_BIN).exists():
+            logger.error(f"Piper binary not found: {PIPER_BIN}")
+            return
+
         piper_proc = subprocess.Popen(
-            [PIPER_BIN, "-m", PIPER_MODEL, "-c", PIPER_CONFIG, "--output-raw"],
+            [PIPER_BIN, "-m", PIPER_MODEL, "-q"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
+
         play_proc = subprocess.Popen(
             ["paplay", "--raw", "--format=s16le", "--rate=22050", "--channels=1"],
             stdin=piper_proc.stdout,
@@ -538,31 +663,128 @@ def speak(text: str):
             stderr=subprocess.DEVNULL,
             env=PULSE_ENV,
         )
-        piper_proc.stdin.write(text.encode())
+
+        # Write text to Piper and close stdin
+        piper_proc.stdin.write(text.encode("utf-8"))
         piper_proc.stdin.close()
-        play_proc.wait()
-    except FileNotFoundError:
+
+        # Wait for playback to complete with timeout
         try:
-            piper_proc = subprocess.Popen(
-                [PIPER_BIN, "-m", PIPER_MODEL, "-c", PIPER_CONFIG, "--output-raw"],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-            )
-            ffplay_proc = subprocess.Popen(
-                ["ffplay", "-f", "s16le", "-ar", "22050", "-ac", "1",
-                 "-nodisp", "-autoexit", "-"],
-                stdin=piper_proc.stdout,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            piper_proc.stdin.write(text.encode())
-            piper_proc.stdin.close()
-            ffplay_proc.wait()
-        except Exception as e:
-            print(f"TTS error: {e}")
+            play_proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            logger.warning("Audio playback timeout, terminating")
+            play_proc.terminate()
+            try:
+                play_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                play_proc.kill()
+
+        # Check Piper exit status
+        piper_proc.wait()
+        if piper_proc.returncode != 0:
+            stderr = piper_proc.stderr.read().decode("utf-8", errors="ignore")[:200] if piper_proc.stderr else "unknown error"
+            logger.warning(f"Piper exited with code {piper_proc.returncode}: {stderr}")
+
+    except FileNotFoundError as e:
+        logger.error(f"Audio binary not found: {e.filename}")
+        # Try fallback to ffplay if paplay missing
+        if "paplay" in str(e):
+            logger.info("Attempting ffplay fallback")
+            try:
+                piper_fb = subprocess.Popen(
+                    [PIPER_BIN, "-m", PIPER_MODEL, "-q", "--output-raw"],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                )
+                ffplay_fb = subprocess.Popen(
+                    ["ffplay", "-autoexit", "-nodisp", "-f", "s16le", "-ar", "22050", "-ac", "1", "-i", "pipe:0"],
+                    stdin=piper_fb.stdout,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                piper_fb.stdin.write(text.encode("utf-8"))
+                piper_fb.stdin.close()
+                ffplay_fb.wait(timeout=30)
+            except Exception as fallback_e:
+                logger.error(f"ffplay fallback also failed: {fallback_e}")
+
+    except BrokenPipeError:
+        logger.warning("Broken pipe during audio playback - Piper or paplay terminated unexpectedly")
     except Exception as e:
-        print(f"TTS error: {e}")
+        logger.error(f"Audio synthesis failed: {e}")
+
+
+# ── Server Mode ───────────────────────────────────────────────────────────────
+
+def _server_turn(messages: list) -> str:
+    """Stateless single-turn handler for server mode.
+    Expects the user message to already be the last entry in messages.
+    Handles tool calling internally and returns the final assistant response.
+    """
+    response = chat_completion(messages)
+    tool_name, tool_params = parse_tool_call(response)
+
+    if tool_name:
+        logger.info(f"server tool_call tool={tool_name} params={json.dumps(tool_params)}")
+        tool_result = call_tool(tool_name, tool_params)
+        logger.info(f"server tool_result tool={tool_name} result_len={len(tool_result)}")
+        follow_up = messages + [
+            {"role": "assistant", "content": response},
+            {"role": "user", "content": f"Tool result: {tool_result}\n\nNow summarize this result naturally."},
+        ]
+        return chat_completion(follow_up, max_tokens=200)
+
+    return response
+
+
+def build_server_app(kb_context: str) -> "FastAPI":
+    app = FastAPI(title="Christopher", version="1.0")
+
+    base_messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if kb_context:
+        base_messages.append({
+            "role": "system",
+            "content": (
+                "Use this project knowledge-base context as high-priority background facts. "
+                "If user asks about current priorities/status, prefer this context over stale assumptions.\n\n"
+                f"{kb_context}"
+            ),
+        })
+
+    @app.get("/health")
+    async def health():
+        reachable = is_server_reachable()
+        return JSONResponse({"status": "ok" if reachable else "degraded", "llm": reachable})
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: Request):
+        body = await request.json()
+        incoming = body.get("messages", [])
+
+        # Strip any system messages from the client — we own the system prompt
+        user_turns = [m for m in incoming if m.get("role") != "system"]
+        # Cap history to last 6 turns so base_messages + history stays within LLAMA_CTX
+        user_turns = user_turns[-6:]
+        messages = base_messages + user_turns
+
+        response_text = _server_turn(messages)
+        logger.info(f"server response len={len(response_text)}")
+
+        return {
+            "id": f"chatcmpl-{int(time.time())}",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": os.path.basename(LLAMA_MODEL),
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": response_text},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+
+    return app
 
 
 # ── Main Loop ─────────────────────────────────────────────────────────────────
@@ -583,6 +805,8 @@ def main():
                         help="Prompt to use during benchmark mode")
     parser.add_argument("--no-kb", action="store_true", help="Disable fusional-knowledge-base bootstrap context")
     parser.add_argument("--kb-root", default="", help="Override knowledge-base root path for this run")
+    parser.add_argument("--server", action="store_true", help="Run as OpenAI-compatible HTTP server (for OpenClaw/Telegram)")
+    parser.add_argument("--server-port", type=int, default=8090, help="Port for server mode (default: 8090)")
     args = parser.parse_args()
 
     configure_model_runtime(
@@ -592,11 +816,11 @@ def main():
         ctx=args.ctx,
     )
 
-    voice_mode = not args.chat and not args.benchmark
+    voice_mode = not args.chat and not args.benchmark and not args.server
 
     print("=" * 55)
     print("  Christopher — Local AI")
-    mode_label = "BENCHMARK" if args.benchmark else ("VOICE" if voice_mode else "TEXT CHAT")
+    mode_label = "BENCHMARK" if args.benchmark else ("SERVER" if args.server else ("VOICE" if voice_mode else "TEXT CHAT"))
     print(f"  Mode: {mode_label}")
     print(f"  Profile: {CURRENT_MODEL_PROFILE} ({MODEL_PROFILES[CURRENT_MODEL_PROFILE]['label']})")
     print(f"  Model: {os.path.basename(LLAMA_MODEL)} | GPU layers: {LLAMA_NGL} | ctx: {LLAMA_CTX}")
@@ -608,6 +832,8 @@ def main():
     print(f"  KB context: {'loaded' if kb_context else 'not loaded'}")
     if voice_mode:
         print(f"  PulseAudio: {PULSE_SERVER}")
+    if args.server:
+        print(f"  Server: http://0.0.0.0:{args.server_port}/v1")
     print("=" * 55)
     print()
 
@@ -643,6 +869,22 @@ def main():
             server_proc.wait()
         return
 
+    if args.server:
+        if not _FASTAPI_AVAILABLE:
+            print("❌ fastapi/uvicorn not installed. Run: pip install fastapi uvicorn")
+            sys.exit(1)
+        logger.info(f"kb_context_loaded files={';'.join(kb_files_loaded)}" if kb_context else "kb_context_loaded files=none")
+        app = build_server_app(kb_context)
+        print(f"🦞 Christopher server ready — OpenClaw baseUrl: http://<host>:{args.server_port}/v1")
+        try:
+            uvicorn.run(app, host="0.0.0.0", port=args.server_port, log_level="warning")
+        finally:
+            if server_proc:
+                print("Stopping llama-server...")
+                server_proc.terminate()
+                server_proc.wait()
+        return
+
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     if kb_context:
         kb_system_message = (
@@ -651,12 +893,12 @@ def main():
             f"{kb_context}"
         )
         messages.append({"role": "system", "content": kb_system_message})
-        log.info("kb_context_loaded files=%s", ";".join(kb_files_loaded))
+        logger.info(f"kb_context_loaded files={';'.join(kb_files_loaded)}")
     else:
-        log.info("kb_context_loaded files=none")
+        logger.info("kb_context_loaded files=none")
     tmpdir   = tempfile.mkdtemp(prefix="christopher-")
 
-    log.info("startup mode=%s model=%s ngl=%s", 'voice' if voice_mode else 'chat', os.path.basename(LLAMA_MODEL), LLAMA_NGL)
+    logger.info(f"startup mode={'voice' if voice_mode else 'chat'} model={os.path.basename(LLAMA_MODEL)} ngl={LLAMA_NGL}")
     print("💬 Christopher is ready. Type 'quit' to exit.\n")
 
     try:
@@ -666,7 +908,7 @@ def main():
                 if not user_input:
                     print("⚠️  No speech detected")
                     continue
-                log.info("speech transcript=%r", user_input)
+                logger.info(f"speech transcript={user_input!r}")
                 print(f"👤 You: {user_input}")
             else:
                 try:
@@ -680,20 +922,21 @@ def main():
                     break
 
             response = run_turn(messages, user_input, voice_mode)
-            log.info("response len=%d", len(response))
+            logger.info(f"response len={len(response)}")
             print(f"🤖 Christopher: {response}\n")
 
             if voice_mode:
                 speak(response)
 
             if len(messages) > 20:
-                messages = [messages[0]] + messages[-10:]
+                # Keep system prompt + optional KB context (first 2) + last 10 turns
+                head = messages[:2] if len(messages) > 1 and messages[1].get("role") == "system" else messages[:1]
+                messages = head + messages[-10:]
 
     except KeyboardInterrupt:
-        log.info("shutdown keyboard_interrupt")
+        logger.info("shutdown keyboard_interrupt")
         print("\n\nShutting down...")
     finally:
-        import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
         if server_proc:
             print("Stopping llama-server...")

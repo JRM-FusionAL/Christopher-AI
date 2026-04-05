@@ -1,0 +1,25 @@
+﻿=== INCIDENT SNAPSHOT ===
+Sun Apr  5 03:50:34 AM EDT 2026
+just2awesome
+jrm_fusional
+=== DISK ===
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sdc        3.6T  2.7G  3.4T   1% /data
+/dev/sda        916G  373G  498G  43% /home
+=== MOUNT ===
+/dev/sdc on /data type ext4 (rw,relatime)
+=== MODEL_STAT ===
+  File: /data/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf
+  Size: 2019377696	Blocks: 3944112    IO Block: 4096   regular file
+Device: 8,32	Inode: 21757954    Links: 1
+Access: (0664/-rw-rw-r--)  Uid: ( 1000/jrm_fusional)   Gid: ( 1000/jrm_fusional)
+Access: 2026-04-01 22:36:38.280915226 -0400
+Modify: 2026-03-01 15:48:04.226935950 -0500
+Change: 2026-03-01 15:48:04.226935950 -0500
+ Birth: 2026-03-01 15:47:24.905227850 -0500
+=== MODEL_DIR ===
+total 0
+=== LLAMA_PROCESS ===
+    910  278038 /data/projects/llama.cpp/build/bin/llama-server -m /data/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf -ngl 99 -t 4 -c 2048 --host 127.0.0.1 --port 8080 --log-disable
+=== EXT4_WARNINGS ===
+=== ENV ===

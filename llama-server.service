@@ -23,8 +23,8 @@ Type=simple
 User=jrm_fusional
 Group=jrm_fusional
 
-ExecStart=/data/projects/llama.cpp/build/bin/llama-server \
-    -m /data/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf \
+ExecStart=/home/jrm_fusional/llama.cpp/build/bin/llama-server \
+    -m /home/jrm_fusional/llama.cpp/models/Llama-3.2-3B-Instruct-Q4_K_M.gguf \
     -ngl 99 \
     -t 4 \
     -c 2048 \
