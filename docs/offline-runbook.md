@@ -255,6 +255,8 @@ Christopher-AI/                     ← this repo
   (+ all other repo files)
 
 Python packages (offline wheel cache):
+  # christopher_requirements.txt covers: requests, python-dotenv, fastapi, uvicorn
+  # piper-tts is installed separately (not in christopher_requirements.txt)
   pip download -r christopher_requirements.txt -d /tmp/pip-cache
   pip download piper-tts -d /tmp/pip-cache
 ```
@@ -262,8 +264,11 @@ Python packages (offline wheel cache):
 ### Transfer and Install
 
 ```bash
-# On the air-gapped machine — install Python deps from local cache
+# On the air-gapped machine:
+# Install orchestrator dependencies (requests, python-dotenv, fastapi, uvicorn)
 pip install --no-index --find-links /path/to/pip-cache -r christopher_requirements.txt
+
+# Install piper-tts separately (it is not included in christopher_requirements.txt)
 pip install --no-index --find-links /path/to/pip-cache piper-tts
 
 # Place binaries and models at the paths your .env references, then verify:
@@ -279,7 +284,9 @@ In WSL2, PulseAudio runs on the **Windows** host — it is not an internet servi
 and is fully available offline. The only requirement is that PulseAudio is started
 on Windows before launching Christopher in WSL2:
 
-1. Start PulseAudio on Windows: `C:\PulseAudio\start-pulseaudio.cmd`
+1. Start PulseAudio on Windows using your installation's start script.
+   Example (adjust path to match your installation):
+   `C:\PulseAudio\bin\pulseaudio.exe` or the bundled `start-pulseaudio.cmd`
 2. In WSL2, export the server address (changes on each reboot):
 
 ```bash
