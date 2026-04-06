@@ -260,5 +260,6 @@ sudo systemctl disable llama-server && sudo rm /etc/systemd/system/llama-server.
 ## Further Help
 
 - [README.md](../README.md) — project overview and GPU tuning guide
+- [offline-runbook.md](offline-runbook.md) — offline startup, fallback behaviors, and air-gapped deployment
 - [preflight_voice.sh](../preflight_voice.sh) — voice pipeline health check
 - [.env.example](../.env.example) — all configuration variables with comments

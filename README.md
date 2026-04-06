@@ -53,6 +53,8 @@ python3 christopher.py --voice  # start voice mode
 
 > See **[docs/pilot-setup-guide.md](docs/pilot-setup-guide.md)** for supported host
 > configurations, failure recovery, and full walkthrough.
+> See **[docs/offline-runbook.md](docs/offline-runbook.md)** for offline startup,
+> fallback behaviors, and air-gapped deployment.
 
 ---
 
