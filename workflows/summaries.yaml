@@ -1,0 +1,143 @@
+# summaries.yaml — Voice Summary Generation Workflow Template
+#
+# Purpose:
+#   Accept a block of spoken or transcribed text (notes, a conversation log,
+#   a field report) and generate a concise spoken summary, optionally dispatched
+#   to a channel or written to a file.
+#
+# How to use:
+#   1. Copy this file and rename it for your domain (e.g. shift-summary.yaml).
+#   2. Set the `summary_style` that fits your use case (bullet / prose / tldr).
+#   3. Optionally chain with the notes template: feed captured notes as input.
+#   4. Pass the system_prompt as the active context at session start.
+
+template:
+  name: summaries
+  version: "1.0"
+  description: >
+    Generate a structured summary from spoken input or a pre-built transcript.
+    Christopher condenses the content into the requested style (bullet points,
+    prose paragraph, or TL;DR) and speaks it back, with an optional dispatch step.
+
+# ── System prompt injected at conversation start ──────────────────────────────
+system_prompt: |
+  You are a summarization assistant. Your only job is to produce a clear,
+  concise summary from the content the user provides.
+
+  RULES:
+  - Output in the requested style: bullet, prose, or tldr
+  - bullet: 3-5 action-oriented bullet points, each one sentence
+  - prose:  2-3 sentence paragraph, active voice
+  - tldr:   single sentence, ≤ 20 words
+  - Preserve all proper nouns, numbers, and named entities exactly
+  - Do not add information that was not in the source
+  - Speak the summary aloud, then ask if the user wants it dispatched
+
+  Default style: prose
+
+# ── Input schema ──────────────────────────────────────────────────────────────
+input:
+  description: >
+    The source content to summarize. May be spoken live, pasted as text,
+    or passed programmatically from the notes workflow output.
+  fields:
+    source_text:
+      type: string
+      description: >
+        The raw content to summarize — a transcript, a set of notes, or a
+        spoken description of what happened.
+      required: true
+    summary_style:
+      type: string
+      description: >
+        Desired output format. One of: bullet, prose, tldr.
+      required: false
+      default: prose
+    dispatch_after:
+      type: boolean
+      description: >
+        If true, prompt the user for a dispatch destination and send the
+        summary via the dispatch workflow after generation.
+      required: false
+      default: false
+  example_utterance: >
+    "Summarize my shift notes as bullet points."
+
+# ── Output schema ─────────────────────────────────────────────────────────────
+output:
+  description: >
+    The generated summary in the requested style, spoken by Christopher,
+    and optionally written to a file or dispatched.
+  fields:
+    summary_text:
+      type: string
+      description: The generated summary string.
+    summary_style:
+      type: string
+      description: The style used (bullet / prose / tldr).
+    spoken_output:
+      type: string
+      description: Exactly what Christopher speaks aloud.
+    dispatched:
+      type: boolean
+      description: Whether the summary was sent via a dispatch tool.
+  examples:
+    bullet: |
+      • Sensor readings in east wing were 3 °C above baseline.
+      • Maintenance ticket raised for east wing HVAC unit.
+      • All other zones nominal.
+    prose: |
+      East wing sensors recorded a 3-degree temperature anomaly; a maintenance
+      ticket has been raised for the HVAC unit. All other monitored zones
+      reported nominal readings.
+    tldr: "East wing HVAC anomaly flagged; ticket raised, all other zones normal."
+
+# ── Sample turn ───────────────────────────────────────────────────────────────
+sample:
+  user: >
+    "Summarize these notes as bullet points: the east wing sensor is reading
+    3 degrees above baseline, a maintenance ticket was created for the HVAC
+    unit, all other zones are normal."
+  assistant_summary: |
+    Here's your bullet-point summary:
+    • East wing sensor reading 3 degrees above baseline.
+    • Maintenance ticket created for east wing HVAC unit.
+    • All other zones nominal.
+  assistant_followup: "Want me to dispatch this summary somewhere?"
+  user_followup: "Yes, send it to ops-team."
+  tool_call: |
+    TOOL_CALL: {"tool": "slack_send", "params": {"channel": "#ops-team", "text": "• East wing sensor reading 3 degrees above baseline.\n• Maintenance ticket created for east wing HVAC unit.\n• All other zones nominal."}}
+  assistant_final: "Summary dispatched to ops-team."
+
+# ── Customization points ──────────────────────────────────────────────────────
+customization:
+  change_default_style:
+    description: >
+      Set a different default summary style for your team by changing the
+      `Default style` line in system_prompt.
+    example: |
+      Default style: tldr   # best for voice-only environments
+
+  restrict_length:
+    description: >
+      For radio or intercom use, cap the spoken output by adding a word
+      limit rule to the system_prompt.
+    example_prompt_addition: |
+      Hard limit: summary must be ≤ 50 words. Cut lower-priority points if needed.
+
+  chain_with_notes:
+    description: >
+      Feed the output of the notes workflow directly into this template.
+      In christopher.py, after a note-capture session ends, call run_turn()
+      with the collected NOTE: lines as source_text.
+    example_code: |
+      source = "\n".join(captured_notes)
+      run_turn(messages, f"Summarize as bullet points:\n{source}", voice_mode=True)
+
+  auto_dispatch:
+    description: >
+      Pre-configure a dispatch destination so summaries are sent automatically
+      without a follow-up question. Set `dispatch_after: true` and add a
+      default channel to the system_prompt:
+    example_prompt_addition: |
+      After speaking the summary, always dispatch to #shift-reports without asking.

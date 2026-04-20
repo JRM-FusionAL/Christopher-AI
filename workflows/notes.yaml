@@ -1,0 +1,118 @@
+# notes.yaml — Voice Note Capture Workflow Template
+#
+# Purpose:
+#   Capture a spoken note verbatim, optionally tag it with a category,
+#   and write it to a local file or post it to a configured MCP endpoint.
+#
+# How to use:
+#   1. Copy this file and rename it for your domain (e.g. field-notes.yaml).
+#   2. Set `output.destination` to the path or MCP tool where notes are stored.
+#   3. Edit the `system_prompt` to reflect your team's note categories.
+#   4. Pass the system_prompt as the active context at session start.
+
+template:
+  name: notes
+  version: "1.0"
+  description: >
+    Transcribe a spoken note, apply a category tag, and persist it to a
+    local file or remote store. Christopher echoes the captured note back
+    for confirmation before saving.
+
+# ── System prompt injected at conversation start ──────────────────────────────
+system_prompt: |
+  You are a note-capture assistant. Your only job is to record what the
+  user says accurately and tag it with a category.
+
+  RULES:
+  - Transcribe the user's speech exactly — do not paraphrase
+  - Infer a category from context: meeting, action, observation, issue, idea
+  - Echo the note back in one sentence before saving
+  - Ask for confirmation only if the note is ambiguous (> 30 words with no clear subject)
+  - Format: "[CATEGORY] <note text>"
+
+  After confirmation, output the note in this format and stop:
+  NOTE: [CATEGORY] <note text>
+
+# ── Input schema ──────────────────────────────────────────────────────────────
+input:
+  description: >
+    Spoken note content. The user dictates any free-form text. An optional
+    explicit category override may be prepended ("observation: ...").
+  fields:
+    note_text:
+      type: string
+      description: The raw spoken note content.
+      required: true
+    category:
+      type: string
+      description: >
+        Optional category override. If omitted, Christopher infers one.
+        Supported values: meeting, action, observation, issue, idea
+      required: false
+      default: auto
+  example_utterance: >
+    "Observation: the east wing sensor is reading 3 degrees above baseline."
+
+# ── Output schema ─────────────────────────────────────────────────────────────
+output:
+  description: >
+    The captured note written to `destination`, plus a spoken echo confirming
+    what was saved.
+  fields:
+    formatted_note:
+      type: string
+      description: >
+        The final note string written to storage, prefixed with the category tag
+        and an ISO-8601 timestamp.
+      example: "[OBSERVATION] 2026-04-12T21:00:00Z — East wing sensor reading 3 degrees above baseline."
+    spoken_confirmation:
+      type: string
+      description: Verbal confirmation spoken by Christopher.
+      example: "Saved: east wing sensor is reading 3 degrees above baseline."
+  destination:
+    type: string
+    description: >
+      Path to the local notes file (default) or MCP endpoint.
+    default: "~/christopher-notes.md"
+
+# ── Sample turn ───────────────────────────────────────────────────────────────
+sample:
+  user: "Observation: the east wing sensor is reading 3 degrees above baseline."
+  assistant_echo: "Got it — east wing sensor reading 3 degrees above baseline. Saving as observation."
+  saved_note: "[OBSERVATION] 2026-04-12T21:00:00Z — East wing sensor is reading 3 degrees above baseline."
+  assistant_final: "Saved."
+
+# ── Customization points ──────────────────────────────────────────────────────
+customization:
+  change_storage:
+    description: >
+      By default, notes are appended to a local markdown file. To post to a
+      remote store, add a `save_note` tool in christopher.py → call_tool()
+      and update the system_prompt to emit a TOOL_CALL instead of a NOTE: line.
+    tool_name: save_note
+    required_params:
+      - category
+      - text
+      - timestamp
+
+  add_project_tag:
+    description: >
+      Extend the note format to include a project identifier for multi-project
+      environments. Update the system_prompt format line:
+    example_prompt_addition: |
+      Format: "[CATEGORY][PROJECT] <note text>"
+      Extract PROJECT from the user's speech if named; otherwise use "general".
+
+  voice_confirmation:
+    description: >
+      To require explicit verbal confirmation before saving, add this rule to
+      the system_prompt:
+    example_prompt_addition: |
+      After echoing the note, wait for the user to say "confirm" or "cancel".
+      Only output the NOTE: line after hearing "confirm".
+
+  custom_categories:
+    description: >
+      Replace the default category list with domain-specific tags:
+    example_prompt_addition: |
+      Category values: patrol, incident, handoff, equipment, welfare

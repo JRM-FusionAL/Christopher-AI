@@ -158,6 +158,22 @@ This prints per-run latency and the average so you can compare on your actual ha
 
 ---
 
+## Workflow Templates
+
+Christopher ships three ready-to-use voice workflow templates in the
+[`workflows/`](workflows/) directory.
+
+| Template | File | Description |
+|----------|------|-------------|
+| Dispatch | [`workflows/dispatch.yaml`](workflows/dispatch.yaml) | Route a spoken message to Slack, GitHub Issues, or a webhook |
+| Note Capture | [`workflows/notes.yaml`](workflows/notes.yaml) | Transcribe and tag a spoken note; write it to a local file or remote store |
+| Summary Generation | [`workflows/summaries.yaml`](workflows/summaries.yaml) | Condense notes or a transcript into bullet points, prose, or a TL;DR |
+
+See **[docs/workflow-templates.md](docs/workflow-templates.md)** for full schemas,
+sample turns, and domain adaptation guidance.
+
+---
+
 ## Roadmap
 
 - [ ] Wake word detection

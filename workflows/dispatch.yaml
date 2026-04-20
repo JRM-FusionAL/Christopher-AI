@@ -1,0 +1,106 @@
+# dispatch.yaml — Voice Dispatch Workflow Template
+#
+# Purpose:
+#   Capture a spoken dispatch request, route it to the appropriate channel
+#   (Slack, GitHub, or a custom webhook), and confirm delivery aloud.
+#
+# How to use:
+#   1. Copy this file and rename it for your domain (e.g. incident-dispatch.yaml).
+#   2. Edit the `system_prompt` to reflect your team's terminology.
+#   3. Wire `output.tool` to the MCP tool that matches your destination.
+#   4. Reference the template in christopher.py by passing the system_prompt
+#      as the active context at session start.
+
+template:
+  name: dispatch
+  version: "1.0"
+  description: >
+    Route a spoken command to a team channel or ticketing system.
+    Christopher listens, extracts the recipient and message body,
+    calls the configured MCP tool, and speaks a confirmation.
+
+# ── System prompt injected at conversation start ──────────────────────────────
+system_prompt: |
+  You are a dispatch assistant. Your only job is to extract a destination
+  and message from the user's speech and dispatch it immediately.
+
+  RULES:
+  - Extract: recipient (channel/person) and message body
+  - Always confirm what you are about to send before dispatching
+  - Speak the confirmation in one sentence, then call the tool
+  - If the destination is unclear, ask one clarifying question only
+
+  TOOL:
+  TOOL_CALL: {"tool": "slack_send", "params": {"channel": "<recipient>", "text": "<message>"}}
+
+# ── Input schema ──────────────────────────────────────────────────────────────
+input:
+  description: >
+    Spoken natural-language dispatch request. The user names a recipient
+    and states the message they want to send.
+  fields:
+    recipient:
+      type: string
+      description: >
+        The channel name, username, or team to receive the message.
+        Examples: "#ops-team", "@alice", "incident-channel"
+      required: true
+    message:
+      type: string
+      description: The body of the message to dispatch.
+      required: true
+  example_utterance: >
+    "Send to ops-team: the staging database is down, please investigate."
+
+# ── Output schema ─────────────────────────────────────────────────────────────
+output:
+  description: >
+    A spoken confirmation that the message was dispatched, followed by
+    the tool result from the MCP integration.
+  fields:
+    spoken_confirmation:
+      type: string
+      description: One-sentence verbal confirmation spoken by Christopher.
+      example: "Dispatching to ops-team: the staging database is down."
+    tool_result:
+      type: string
+      description: Raw delivery confirmation returned by the MCP tool.
+      example: "Slack message sent to #ops-team"
+  example_response: >
+    "Message dispatched to ops-team. They've been notified."
+
+# ── Sample turn ───────────────────────────────────────────────────────────────
+sample:
+  user: "Tell ops-team: the staging database is down, please investigate."
+  assistant_tool_call: |
+    TOOL_CALL: {"tool": "slack_send", "params": {"channel": "#ops-team", "text": "Staging database is down, please investigate."}}
+  tool_result: "Slack message sent to #ops-team"
+  assistant_final: "Message dispatched to ops-team. They've been notified."
+
+# ── Customization points ──────────────────────────────────────────────────────
+customization:
+  change_destination:
+    description: >
+      Swap `slack_send` for `github_create_issue` to route dispatches
+      to a GitHub issue tracker instead of Slack.
+    example: |
+      TOOL_CALL: {"tool": "github_create_issue", "params": {
+        "owner": "my-org", "repo": "ops", "title": "<subject>", "body": "<message>"
+      }}
+
+  add_priority_field:
+    description: >
+      Add a priority prefix to the message by updating the system_prompt
+      to extract a severity level from the user's speech.
+    example_prompt_addition: |
+      Also extract: priority (low / medium / high / critical).
+      Prepend [PRIORITY] to the dispatched message text.
+
+  custom_webhook:
+    description: >
+      For non-MCP destinations, call an HTTP endpoint directly by adding
+      a `webhook_dispatch` tool entry in christopher.py → call_tool().
+    tool_name: webhook_dispatch
+    required_params:
+      - url
+      - payload
