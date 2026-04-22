@@ -2,7 +2,7 @@
 # Runs in WSL Ubuntu under /home/oledad
 # Install: pip3 install -r requirements.txt
 
-requests==2.32.4
+requests==2.33.0
 python-dotenv==1.2.1
 fastapi==0.115.12
 uvicorn==0.34.0
