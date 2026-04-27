@@ -1,0 +1,51 @@
+# Christopher-AI Baseline Benchmark Scenarios
+#
+# Three workload profiles covering the latency/throughput spectrum expected
+# during pilot use. Each scenario is independently repeatable.
+#
+# Fields:
+#   id           - unique slug used in CLI args and result file keys
+#   label        - human-readable name for tables
+#   description  - what aspect of the pipeline this exercises
+#   prompt       - exact prompt sent (temperature 0.1 for reproducibility)
+#   max_tokens   - hard ceiling passed to /v1/chat/completions
+#   quality_rubric - pass/fail heuristic reviewers check against sample output
+
+scenarios:
+  - id: short-factual
+    label: "Short Factual"
+    description: >
+      Single-question factual lookup expecting a 1-2 sentence answer.
+      Exercises cold-start token throughput and first-token latency.
+    prompt: "What is the capital of France? Answer in one sentence."
+    max_tokens: 40
+    quality_rubric: "Response contains the word 'Paris'"
+
+  - id: medium-explanation
+    label: "Medium Explanation"
+    description: >
+      Conceptual explanation requiring 3-4 coherent sentences.
+      Exercises sustained generation quality and mid-range context use.
+    prompt: >
+      In 3 to 4 sentences, explain what a transformer neural network is
+      and why the attention mechanism is important.
+    max_tokens: 160
+    quality_rubric: >
+      Mentions attention mechanism; contains at least 3 sentences;
+      no obvious mid-sentence truncation
+
+  - id: complex-list
+    label: "Complex Structured List"
+    description: >
+      Multi-point structured reasoning response requiring format adherence.
+      Exercises longer output coherence and instruction-following under
+      a token budget that fits within the mistral-7b context limit.
+    prompt: >
+      List exactly 3 advantages and 3 disadvantages of running AI models
+      locally on your own hardware instead of using cloud APIs.
+      Format each group as a numbered list with a bold heading.
+    max_tokens: 320
+    quality_rubric: >
+      Contains both an advantages and a disadvantages section;
+      each section has exactly 3 numbered items;
+      covers at least one of: privacy, cost, latency, control
