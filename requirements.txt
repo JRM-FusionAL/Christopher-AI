@@ -1,7 +1,7 @@
 # Christopher-AI - Local Voice AI Orchestrator
 # Python 3.11+ | Last updated: 2026-04-22
 
-fastapi==0.136.0
+fastapi==0.136.1
 uvicorn[standard]==0.45.0
 python-dotenv==1.2.2
 requests==2.33.1
