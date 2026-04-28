@@ -151,7 +151,7 @@ fi
 # ── 2. Python dependencies ─────────────────────────────────────────────────────
 header "Step 2 of 6: Python dependencies"
 echo "  Installing requests and python-dotenv..."
-run pip3 install requests python-dotenv --quiet
+run pip3 install requests python-dotenv --quiet --break-system-packages
 info "requests, python-dotenv"
 
 # ── 3. whisper.cpp ─────────────────────────────────────────────────────────────
@@ -224,7 +224,7 @@ if command -v piper &>/dev/null && [[ -f "$PIPER_ONNX" ]]; then
   info "Piper TTS already installed with voice model"
 else
   echo "  Installing Piper TTS..."
-  run pip3 install piper-tts --quiet
+  run pip3 install piper-tts --quiet --break-system-packages
   run mkdir -p "$PIPER_MODEL_DIR"
   if [[ ! -f "$PIPER_ONNX" ]]; then
     echo "  Downloading Piper libritts-high voice model..."
