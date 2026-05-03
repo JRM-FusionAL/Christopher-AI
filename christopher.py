@@ -189,23 +189,24 @@ SYSTEM_PROMPT = """You are Christopher, a local AI assistant. Be brief and direc
 RULES:
 - Maximum 2 sentences per response unless more is truly needed
 - Never explain your capabilities unless asked
-- Never repeat TOOL_CALL lines in your final response to the user
 - No bullet points, no markdown, no lists
-- Output ONLY the TOOL_CALL line, then STOP. Never write "Tool result:" yourself.
+- For most questions answer directly from your own knowledge — do NOT use a tool.
 
-TOOLS — use when the task requires it, output on its own line, then stop:
+TOOLS — only invoke a tool when the user explicitly asks for live external data
+(business metrics, a specific URL, a Slack message, a GitHub issue, or a Stripe lookup).
+Never call a tool for general knowledge, definitions, explanations, or conversation.
+
+When a tool IS needed, output exactly one TOOL_CALL line, then stop:
 TOOL_CALL: {"tool": "tool_name", "params": {"key": "value"}}
 
-nl_query            - query a SQL database only. params: query, schema_hint(optional)
-                      Use ONLY for business data, metrics, revenue. NOT for web content.
-scrape_article      - extract article text from a URL. params: url
-scrape_links        - extract all links from a page. params: url
-parse_rss           - fetch headlines from any RSS feed. params: url, limit(optional)
-                      Hacker News: https://news.ycombinator.com/rss
-                      Reddit: https://www.reddit.com/r/SUBREDDIT/.rss
-slack_send          - send a slack message. params: channel, text
-github_create_issue - create github issue. params: owner, repo, title, body(optional)
-stripe_customer_lookup - look up stripe customer. params: customer_id
+Available tools:
+nl_query            - live SQL query for business data/metrics/revenue only
+scrape_article      - extract text from a URL
+scrape_links        - list all links on a page
+parse_rss           - fetch RSS headlines. params: url, limit(optional)
+slack_send          - send a Slack message. params: channel, text
+github_create_issue - create a GitHub issue. params: owner, repo, title, body(optional)
+stripe_customer_lookup - look up a Stripe customer. params: customer_id
 
 After a tool runs you will receive: Tool result: <data>
 Summarize the result naturally in 1-2 sentences. Do not show raw data."""
@@ -534,17 +535,8 @@ def run_turn(messages: list, user_input: str, voice_mode: bool) -> str:
 
 # ── Voice I/O ─────────────────────────────────────────────────────────────────
 
-def listen(tmpdir: str) -> str:
-    """Record mic via parec (PulseAudio) and transcribe with whisper.cpp.
-    Uses parec instead of arecord — WSL2 has no ALSA soundcard.
-    PULSE_SERVER env var must point at Windows PulseAudio TCP server.
-    """
-    raw_file        = os.path.join(tmpdir, "input.raw")
-    audio_file      = os.path.join(tmpdir, "input.wav")
-    transcript_base = os.path.join(tmpdir, "transcript")
-
-    print(f"🔴 Listening {LISTEN_SECONDS}s...", end="", flush=True)
-
+def _record_parec(raw_file: str) -> bool:
+    """Record audio via parec (PulseAudio). Returns True on success."""
     try:
         rec_proc = subprocess.Popen(
             ["parec", "--format=s16le", "--rate=16000", "--channels=1", raw_file],
@@ -559,45 +551,92 @@ def listen(tmpdir: str) -> str:
             logger.warning("parec did not terminate gracefully, killing")
             rec_proc.kill()
             rec_proc.wait()
-        print(" done")
+        return os.path.exists(raw_file) and os.path.getsize(raw_file) > 0
     except FileNotFoundError:
-        logger.error("parec binary not found - PulseAudio not installed or not in PATH")
-        return ""
+        logger.info("parec not found, will try arecord fallback")
+        return False
     except Exception as e:
-        logger.error(f"Audio recording failed: {e}")
-        return ""
+        logger.error(f"parec recording failed: {e}")
+        return False
 
-    if not os.path.exists(raw_file):
+
+def _record_arecord(wav_file: str) -> bool:
+    """Record audio via arecord (ALSA). Returns True on success."""
+    try:
+        rec_proc = subprocess.Popen(
+            ["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1", "-d", str(LISTEN_SECONDS), wav_file],
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            rec_proc.wait(timeout=LISTEN_SECONDS + 5)
+        except subprocess.TimeoutExpired:
+            logger.warning("arecord timed out, killing")
+            rec_proc.kill()
+            rec_proc.wait()
+        return os.path.exists(wav_file) and os.path.getsize(wav_file) > 0
+    except FileNotFoundError:
+        logger.error("arecord not found - neither parec nor arecord is available")
+        return False
+    except Exception as e:
+        logger.error(f"arecord recording failed: {e}")
+        return False
+
+
+def listen(tmpdir: str) -> str:
+    """Record mic (parec/PulseAudio with arecord/ALSA fallback) and transcribe
+    with whisper.cpp.  PULSE_SERVER env var must point at the PulseAudio server
+    when using parec (required for WSL2).
+    """
+    raw_file        = os.path.join(tmpdir, "input.raw")
+    audio_file      = os.path.join(tmpdir, "input.wav")
+    transcript_base = os.path.join(tmpdir, "transcript")
+
+    print(f"🔴 Listening {LISTEN_SECONDS}s...", end="", flush=True)
+
+    # Try parec (PulseAudio) first; fall back to arecord (ALSA)
+    used_arecord = False
+    if _record_parec(raw_file):
+        print(" done")
+    else:
+        logger.info("Falling back to arecord (ALSA)")
+        if not _record_arecord(audio_file):
+            logger.error("All audio capture methods failed")
+            return ""
+        print(" done (arecord)")
+        used_arecord = True
+
+    if not used_arecord and not os.path.exists(raw_file):
         logger.error("Recording produced no audio file")
         return ""
 
-    # Convert raw PCM -> WAV for whisper.cpp — sox first, ffmpeg as fallback
-    try:
-        conv = subprocess.run(
-            ["sox", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16",
-             "-c", "1", raw_file, audio_file],
-            capture_output=True,
-            timeout=10
-        )
-        if conv.returncode != 0:
-            logger.debug(f"sox failed ({conv.returncode}), trying ffmpeg")
-            try:
-                subprocess.run(
-                    ["ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1",
-                     "-i", raw_file, audio_file],
-                    capture_output=True,
-                    timeout=10
-                )
-            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-                logger.error(f"ffmpeg failed: {e}, cannot convert audio")
-                return ""
-    except subprocess.TimeoutExpired:
-        logger.error("Audio conversion timeout")
-        return ""
+    # Convert raw PCM -> WAV for whisper.cpp (skipped when arecord wrote WAV directly)
+    if not used_arecord:
+        try:
+            conv = subprocess.run(
+                ["sox", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16",
+                 "-c", "1", raw_file, audio_file],
+                capture_output=True,
+                timeout=10
+            )
+            if conv.returncode != 0:
+                logger.debug(f"sox failed ({conv.returncode}), trying ffmpeg")
+                try:
+                    subprocess.run(
+                        ["ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1",
+                         "-i", raw_file, audio_file],
+                        capture_output=True,
+                        timeout=10
+                    )
+                except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                    logger.error(f"ffmpeg failed: {e}, cannot convert audio")
+                    return ""
+        except subprocess.TimeoutExpired:
+            logger.error("Audio conversion timeout")
+            return ""
 
-    if not os.path.exists(audio_file):
-        logger.error("Audio conversion produced no output file")
-        return ""
+        if not os.path.exists(audio_file):
+            logger.error("Audio conversion produced no output file")
+            return ""
 
     try:
         proc = subprocess.run(
@@ -635,40 +674,25 @@ def listen(tmpdir: str) -> str:
         return ""
 
 
-def speak(text: str) -> None:
-    """Synthesize text with Piper and play via paplay (PulseAudio).
-    Falls back to ffplay if paplay not available.
-    """
-    if not text:
-        logger.warning("speak() called with empty text")
-        return
-
+def _pipe_piper_to_player(text: str, piper_cmd: list, player_cmd: list,
+                           player_env: dict | None = None) -> bool:
+    """Run Piper TTS piped into a player process. Returns True on success."""
     try:
-        # Check if Piper binary exists before launching
-        if not Path(PIPER_BIN).exists():
-            logger.error(f"Piper binary not found: {PIPER_BIN}")
-            return
-
         piper_proc = subprocess.Popen(
-            [PIPER_BIN, "-m", PIPER_MODEL, "-q"],
+            piper_cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-
         play_proc = subprocess.Popen(
-            ["paplay", "--raw", "--format=s16le", "--rate=22050", "--channels=1"],
+            player_cmd,
             stdin=piper_proc.stdout,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            env=PULSE_ENV,
+            env=player_env,
         )
-
-        # Write text to Piper and close stdin
         piper_proc.stdin.write(text.encode("utf-8"))
         piper_proc.stdin.close()
-
-        # Wait for playback to complete with timeout
         try:
             play_proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
@@ -678,41 +702,64 @@ def speak(text: str) -> None:
                 play_proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
                 play_proc.kill()
-
-        # Check Piper exit status
         piper_proc.wait()
         if piper_proc.returncode != 0:
-            stderr = piper_proc.stderr.read().decode("utf-8", errors="ignore")[:200] if piper_proc.stderr else "unknown error"
-            logger.warning(f"Piper exited with code {piper_proc.returncode}: {stderr}")
-
+            stderr_out = piper_proc.stderr.read().decode("utf-8", errors="ignore")[:200] if piper_proc.stderr else ""
+            logger.warning(f"Piper exited {piper_proc.returncode}: {stderr_out}")
+        return True
     except FileNotFoundError as e:
-        logger.error(f"Audio binary not found: {e.filename}")
-        # Try fallback to ffplay if paplay missing
-        if "paplay" in str(e):
-            logger.info("Attempting ffplay fallback")
-            try:
-                piper_fb = subprocess.Popen(
-                    [PIPER_BIN, "-m", PIPER_MODEL, "-q", "--output-raw"],
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
-                )
-                ffplay_fb = subprocess.Popen(
-                    ["ffplay", "-autoexit", "-nodisp", "-f", "s16le", "-ar", "22050", "-ac", "1", "-i", "pipe:0"],
-                    stdin=piper_fb.stdout,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                piper_fb.stdin.write(text.encode("utf-8"))
-                piper_fb.stdin.close()
-                ffplay_fb.wait(timeout=30)
-            except Exception as fallback_e:
-                logger.error(f"ffplay fallback also failed: {fallback_e}")
-
+        logger.debug(f"Player not found: {e.filename}")
+        return False
     except BrokenPipeError:
-        logger.warning("Broken pipe during audio playback - Piper or paplay terminated unexpectedly")
+        logger.warning("Broken pipe during audio playback")
+        return False
     except Exception as e:
-        logger.error(f"Audio synthesis failed: {e}")
+        logger.error(f"Audio playback error: {e}")
+        return False
+
+
+def speak(text: str) -> None:
+    """Synthesize text with Piper TTS and play audio.
+
+    Playback priority: paplay (PulseAudio) → aplay (ALSA) → ffplay.
+    """
+    if not text:
+        logger.warning("speak() called with empty text")
+        return
+
+    if not Path(PIPER_BIN).exists():
+        logger.error(f"Piper binary not found: {PIPER_BIN}")
+        return
+
+    piper_raw_cmd = [PIPER_BIN, "-m", PIPER_MODEL, "-q", "--output-raw"]
+    piper_wav_cmd = [PIPER_BIN, "-m", PIPER_MODEL, "-q"]
+
+    # 1. paplay (PulseAudio — WSL2 primary)
+    if _pipe_piper_to_player(
+        text,
+        piper_wav_cmd,
+        ["paplay", "--raw", "--format=s16le", "--rate=22050", "--channels=1"],
+        player_env=PULSE_ENV,
+    ):
+        return
+
+    # 2. aplay (ALSA — native Linux fallback)
+    logger.info("paplay not available, trying aplay")
+    if _pipe_piper_to_player(
+        text,
+        piper_raw_cmd,
+        ["aplay", "-f", "S16_LE", "-r", "22050", "-c", "1"],
+    ):
+        return
+
+    # 3. ffplay (last resort)
+    logger.info("aplay not available, trying ffplay")
+    if not _pipe_piper_to_player(
+        text,
+        piper_raw_cmd,
+        ["ffplay", "-autoexit", "-nodisp", "-f", "s16le", "-ar", "22050", "-ac", "1", "-i", "pipe:0"],
+    ):
+        logger.error("All audio playback methods failed (paplay, aplay, ffplay)")
 
 
 # ── Server Mode ───────────────────────────────────────────────────────────────
