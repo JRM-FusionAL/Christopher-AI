@@ -79,14 +79,14 @@ MODEL_PROFILES = {
         ],
     },
     "gemma4": {
-        "label": "Gemma 4 4B Instruct Q4_K_M",
+        "label": "Gemma 4 E4B Instruct Q4_K_M",
         "default_ngl": 99,
         "default_ctx": 2048,
         "candidates": [
             ENV.get("LLAMA_MODEL_GEMMA4", ""),
-            "~/llama.cpp/models/gemma-4-4b-it-Q4_K_M.gguf",
-            "/home/oledad/llama.cpp/models/gemma-4-4b-it-Q4_K_M.gguf",
-            "/data/models/gemma-4-4b-it-Q4_K_M.gguf",
+            "~/llama.cpp/models/gemma-4-E4B-it-Q4_K_M.gguf",
+            "/home/oledad/llama.cpp/models/gemma-4-E4B-it-Q4_K_M.gguf",
+            "/data/models/gemma-4-E4B-it-Q4_K_M.gguf",
         ],
     },
 }

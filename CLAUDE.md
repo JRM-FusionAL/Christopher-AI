@@ -136,7 +136,7 @@ Christopher uses named model profiles to switch between LLMs without editing con
 | `llama32-3b` | Llama 3.2 3B Q4_K_M | 4GB | Default; best fit for GTX 1050 Ti |
 | `qwen25-3b` | Qwen2.5 3B Q4_K_M | 4GB | Alternative 3B with strong reasoning |
 | `mistral-7b` | Mistral 7B Q4_K_M | 4GB (slow) / 8GB | Better quality, slower on 4GB |
-| `gemma4` | Gemma 4 4B Instruct Q4_K_M | 4GB | Google Gemma 4 4B |
+| `gemma4` | Gemma 4 E4B Instruct Q4_K_M | 4GB | Google Gemma 4 E4B (4.5B dense, 4.98 GB) |
 
 Set default in `.env`:
 ```bash
