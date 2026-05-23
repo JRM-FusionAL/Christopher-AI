@@ -136,6 +136,7 @@ Christopher uses named model profiles to switch between LLMs without editing con
 | `llama32-3b` | Llama 3.2 3B Q4_K_M | 4GB | Default; best fit for GTX 1050 Ti |
 | `qwen25-3b` | Qwen2.5 3B Q4_K_M | 4GB | Alternative 3B with strong reasoning |
 | `mistral-7b` | Mistral 7B Q4_K_M | 4GB (slow) / 8GB | Better quality, slower on 4GB |
+| `gemma4` | Gemma 4 4B Instruct Q4_K_M | 4GB | Google Gemma 4 4B |
 
 Set default in `.env`:
 ```bash
@@ -172,6 +173,7 @@ correct paths. Key vars:
 | `LLAMA_MODEL_LLAMA32_3B` | — | Path for llama32-3b profile |
 | `LLAMA_MODEL_QWEN25_3B` | — | Path for qwen25-3b profile |
 | `LLAMA_MODEL_MISTRAL_7B` | — | Path for mistral-7b profile |
+| `LLAMA_MODEL_GEMMA4` | — | Path for gemma4 profile |
 | `LLAMA_SERVER_URL` | `http://localhost:8080` | llama-server URL |
 | `LLAMA_NGL` | (from profile) | GPU layers to offload |
 | `LLAMA_THREADS` | `4` | CPU threads for non-GPU layers |

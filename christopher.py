@@ -78,6 +78,17 @@ MODEL_PROFILES = {
             "/data/models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
         ],
     },
+    "gemma4": {
+        "label": "Gemma 4 4B Instruct Q4_K_M",
+        "default_ngl": 99,
+        "default_ctx": 2048,
+        "candidates": [
+            ENV.get("LLAMA_MODEL_GEMMA4", ""),
+            "~/llama.cpp/models/gemma-4-4b-it-Q4_K_M.gguf",
+            "/home/oledad/llama.cpp/models/gemma-4-4b-it-Q4_K_M.gguf",
+            "/data/models/gemma-4-4b-it-Q4_K_M.gguf",
+        ],
+    },
 }
 
 DEFAULT_MODEL_PROFILE = ENV.get("MODEL_PROFILE", "llama32-3b")
