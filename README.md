@@ -200,6 +200,18 @@ His son saved me. This project is dedicated to them.
 
 ---
 
+## Server mode and endpoint monitoring
+
+Run Christopher as an OpenAI-compatible HTTP API (default port 8090):
+
+```bash
+python3 christopher.py --server --server-port 8090
+```
+
+A Cloudflare Agents SDK worker in [`agents/endpoint-maintainer`](agents/endpoint-maintainer) probes `/health` and `/v1/chat/completions` on a schedule. See that directory's README for setup and tunnel notes.
+
+---
+
 ## Author
 
 **Jonathan Melton** — Self-taught developer. Privacy-first AI engineering.

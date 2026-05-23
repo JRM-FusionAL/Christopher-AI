@@ -1,0 +1,26 @@
+{
+  "name": "christopher-endpoint-maintainer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Agent that monitors and maintains Christopher-AI HTTP endpoints",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "start": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "cf-typegen": "wrangler types",
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "agents": "^0.13.2"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.12.4",
+    "@cloudflare/workers-types": "^4.20260521.0",
+    "@types/node": "^25.9.1",
+    "typescript": "^5.8.2",
+    "vitest": "~3.2.0",
+    "wrangler": "^4.94.0"
+  }
+}

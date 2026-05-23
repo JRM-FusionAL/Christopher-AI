@@ -1,0 +1,30 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "christopher-endpoint-maintainer",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "CHRISTOPHER_BASE_URL": "http://127.0.0.1:8090"
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "ChristopherEndpointMaintainer",
+        "class_name": "ChristopherEndpointMaintainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ChristopherEndpointMaintainer"]
+    }
+  ]
+}
