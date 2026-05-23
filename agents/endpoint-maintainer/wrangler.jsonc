@@ -8,7 +8,7 @@
     "enabled": true
   },
   "vars": {
-    "CHRISTOPHER_BASE_URL": "http://127.0.0.1:8090"
+    "CHRISTOPHER_BASE_URL": "https://christopher.fusional.dev"
   },
   "ai": {
     "binding": "AI"
