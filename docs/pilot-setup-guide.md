@@ -211,7 +211,7 @@ Key settings:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MODEL_PROFILE` | `llama32-3b` | Active model profile (`llama32-3b`, `qwen25-3b`, `mistral-7b`) |
+| `MODEL_PROFILE` | `llama32-3b` | Active model profile (`llama32-3b`, `qwen25-3b`, `mistral-7b`, `gemma4`) |
 | `LLAMA_NGL` | _(profile default)_ | GPU layers to offload — increase for more VRAM |
 | `LISTEN_SECONDS` | `5` | Recording length per voice turn |
 | `FUSIONAL_API_KEY` | `changeme` | Required for MCP tool integrations |
@@ -235,6 +235,7 @@ python3 christopher.py --voice --model-profile qwen25-3b
 # Benchmark — compare model latency before committing
 python3 christopher.py --benchmark --model-profile llama32-3b
 python3 christopher.py --benchmark --model-profile qwen25-3b
+python3 christopher.py --benchmark --model-profile gemma4
 ```
 
 ---

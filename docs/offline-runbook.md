@@ -36,6 +36,7 @@ on the target offline host.
       - [ ] `llama32-3b` → `$LLAMA_MODEL_LLAMA32_3B`
       - [ ] `qwen25-3b`  → `$LLAMA_MODEL_QWEN25_3B` _(optional)_
       - [ ] `mistral-7b` → `$LLAMA_MODEL_MISTRAL_7B` _(optional)_
+      - [ ] `gemma4`     → `$LLAMA_MODEL_GEMMA4` _(optional — gemma-4-E4B-it-Q4_K_M.gguf, 4.98 GB)_
 - [ ] `piper` is installed and in `$PATH`
 - [ ] Piper voice model is present at `$PIPER_MODEL`
       (default: `~/piper_models/en_US-libritts-high.onnx`)
@@ -242,8 +243,9 @@ llama.cpp/                          ← compiled source tree
 
 models/                             ← GGUF model files
   Llama-3.2-3B-Instruct-Q4_K_M.gguf
-  Qwen2.5-3B-Instruct-Q4_K_M.gguf   ← optional
-  mistral-7b-instruct-v0.2.Q4_K_M.gguf  ← optional
+  Qwen2.5-3B-Instruct-Q4_K_M.gguf        ← optional
+  mistral-7b-instruct-v0.2.Q4_K_M.gguf   ← optional
+  gemma-4-E4B-it-Q4_K_M.gguf             ← optional (gemma4 profile, 4.98 GB)
 
 piper_models/
   en_US-libritts-high.onnx
