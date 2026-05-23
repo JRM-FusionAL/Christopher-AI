@@ -8,7 +8,7 @@ requests==2.33.1
 scipy==1.17.1
 httpx==0.28.1
 anthropic==0.101.0
-pydantic==2.13.3
+pydantic==2.13.4
 mcp[cli]==1.27.1
 
 # Security: pin transitive deps with known HIGH CVEs to patched versions
