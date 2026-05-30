@@ -25,7 +25,7 @@ This repo pairs with `mcp-consulting-kit` (MCP tool servers) and `fusional`
 | Component | Engine | Default Model |
 |-----------|--------|---------------|
 | Speech recognition | whisper.cpp (compiled from source) | `ggml-base.en` |
-| Language model | llama.cpp + CUDA (compiled from source) | Llama 3.2 3B Q4_K_M |
+| Language model | llama.cpp + CUDA (compiled from source) | Gemma 4 E4B Instruct Q4_K_M |
 | Text to speech | Piper TTS | `en_US-libritts-high.onnx` |
 | Orchestrator | `christopher.py` (Python 3) | — |
 
