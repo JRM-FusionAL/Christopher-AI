@@ -9,6 +9,8 @@ WHISPER_MODEL="${WHISPER_MODEL:-$HOME/whisper.cpp/models/ggml-base.en.bin}"
 LLAMA_BIN="${LLAMA_BIN:-$HOME/llama.cpp/build/bin/llama-cli}"
 PIPER_BIN="${PIPER_BIN:-piper}"
 LISTEN_SECONDS="${LISTEN_SECONDS:-2}"
+# If PAREC_DEVICE is set (e.g. from .env), pass it to parec to avoid monitor source
+PAREC_DEVICE="${PAREC_DEVICE:-}"
 
 PASS_COUNT=0
 WARN_COUNT=0
@@ -20,61 +22,57 @@ fail() { echo "[FAIL] $1"; FAIL_COUNT=$((FAIL_COUNT + 1)); }
 
 section() { echo; echo "== $1 =="; }
 
-detect_windows_host() {
-  if [[ -n "${WINDOWS_HOST:-}" ]]; then
-    echo "$WINDOWS_HOST"
-    return
-  fi
-
-  if [[ -f /etc/resolv.conf ]]; then
-    awk '/^nameserver / { print $2; exit }' /etc/resolv.conf
-    return
-  fi
-
-  echo "127.0.0.1"
+is_wsl() {
+  grep -qi microsoft /proc/version 2>/dev/null
 }
 
-can_reach_pulse() {
+detect_windows_host() {
+  if [[ -n "${WINDOWS_HOST:-}" ]]; then
+    echo "$WINDOWS_HOST"; return
+  fi
+  awk '/^nameserver / { print $2; exit }' /etc/resolv.conf 2>/dev/null || echo "127.0.0.1"
+}
+
+can_reach_pulse_tcp() {
   local host="$1"
   timeout 1 bash -c "cat < /dev/null > /dev/tcp/${host}/4713" >/dev/null 2>&1
 }
 
 choose_pulse_server() {
-  local candidates=()
-  local env_host=""
-
+  # Honour explicit override
   if [[ -n "${PULSE_SERVER:-}" ]]; then
-    env_host="${PULSE_SERVER#tcp:}"
-    env_host="${env_host%%:*}"
-    [[ -n "$env_host" ]] && candidates+=("$env_host")
+    echo "$PULSE_SERVER"; return
   fi
 
-  candidates+=("$(detect_windows_host)")
-
-  if command -v ip >/dev/null 2>&1; then
-    local gw
-    gw="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')"
-    [[ -n "$gw" ]] && candidates+=("$gw")
+  # Native Linux: check for local user socket first
+  local sock="/run/user/$(id -u)/pulse/native"
+  if [[ -S "$sock" ]]; then
+    echo "unix:$sock"; return
   fi
 
-  candidates+=("host.docker.internal" "127.0.0.1" "localhost")
-
-  local seen=""
-  local host
-  for host in "${candidates[@]}"; do
-    [[ -z "$host" ]] && continue
-    case " $seen " in
-      *" $host "*) continue ;;
-    esac
-    seen="$seen $host"
-
-    if can_reach_pulse "$host"; then
-      echo "tcp:${host}:4713"
-      return
+  # WSL2: try Windows host over TCP
+  if is_wsl; then
+    local candidates=()
+    candidates+=("$(detect_windows_host)")
+    if command -v ip >/dev/null 2>&1; then
+      local gw
+      gw="$(ip route 2>/dev/null | awk '/^default/ {print $3; exit}')"
+      [[ -n "$gw" ]] && candidates+=("$gw")
     fi
-  done
+    candidates+=("host.docker.internal" "127.0.0.1" "localhost")
+    local host
+    for host in "${candidates[@]}"; do
+      [[ -z "$host" ]] && continue
+      if can_reach_pulse_tcp "$host"; then
+        echo "tcp:${host}:4713"; return
+      fi
+    done
+    echo "tcp:$(detect_windows_host):4713"
+    return
+  fi
 
-  echo "tcp:$(detect_windows_host):4713"
+  # Native Linux fallback: localhost TCP (in case daemon is on TCP)
+  echo ""
 }
 
 cleanup() {
@@ -88,9 +86,17 @@ WAV_FILE="$TMPDIR_AI/input.wav"
 TRANSCRIPT_BASE="$TMPDIR_AI/transcript"
 
 section "Environment"
-WINDOWS_HOST="$(detect_windows_host)"
-export PULSE_SERVER="$(choose_pulse_server)"
-echo "PULSE_SERVER=$PULSE_SERVER"
+if is_wsl; then
+  WINDOWS_HOST="$(detect_windows_host)"
+  echo "Environment: WSL2 (Windows host: $WINDOWS_HOST)"
+else
+  echo "Environment: native Linux"
+fi
+RESOLVED_PULSE="$(choose_pulse_server)"
+if [[ -n "$RESOLVED_PULSE" ]]; then
+  export PULSE_SERVER="$RESOLVED_PULSE"
+fi
+echo "PULSE_SERVER=${PULSE_SERVER:-<using daemon default>}"
 
 section "Binaries + Models"
 [[ -x "$WHISPER_BIN" ]] && pass "whisper-cli found: $WHISPER_BIN" || fail "whisper-cli missing or not executable: $WHISPER_BIN"
@@ -103,15 +109,21 @@ section "Audio Input"
 CAPTURE_BACKEND="none"
 
 if command -v parec >/dev/null 2>&1; then
-  if timeout "$LISTEN_SECONDS" parec --format=s16le --rate=16000 --channels=1 > "$RAW_FILE" 2>/dev/null; then
-    if [[ -s "$RAW_FILE" ]]; then
-      CAPTURE_BACKEND="parec"
-      pass "Mic capture works via PulseAudio (parec)"
-    else
-      warn "parec returned but captured empty audio"
-    fi
+  # Mirror christopher.py: background + sleep + SIGTERM (timeout can swallow the exit flush)
+  # Use explicit PAREC_DEVICE if set to avoid defaulting to the monitor (loopback) source
+  PAREC_CMD=(parec --format=s16le --rate=16000 --channels=1)
+  [[ -n "$PAREC_DEVICE" ]] && PAREC_CMD+=(--device "$PAREC_DEVICE")
+  PAREC_CMD+=("$RAW_FILE")
+  "${PAREC_CMD[@]}" 2>/dev/null &
+  PAREC_PID=$!
+  sleep "$LISTEN_SECONDS"
+  kill -TERM "$PAREC_PID" 2>/dev/null
+  wait "$PAREC_PID" 2>/dev/null
+  if [[ -s "$RAW_FILE" ]]; then
+    CAPTURE_BACKEND="parec"
+    pass "Mic capture works via PulseAudio (parec${PAREC_DEVICE:+ device=$PAREC_DEVICE})"
   else
-    warn "parec capture failed (PulseAudio may not be reachable)"
+    warn "parec captured empty audio (PulseAudio may not be reachable or no mic connected)"
   fi
 else
   warn "parec not installed"
@@ -178,10 +190,21 @@ echo "Pass: $PASS_COUNT | Warn: $WARN_COUNT | Fail: $FAIL_COUNT"
 if [[ $FAIL_COUNT -gt 0 ]]; then
   echo
   echo "Fixes to try:"
-  echo "1) Start Windows PulseAudio: C:\\PulseAudio\\start-pulseaudio.cmd"
-  echo "2) Export PULSE_SERVER in WSL:"
-  echo "   export PULSE_SERVER=tcp:$(awk '/^nameserver / {print $2; exit}' /etc/resolv.conf):4713"
-  echo "3) Re-run: ./preflight_voice.sh"
+  if is_wsl; then
+    echo "1) Start Windows PulseAudio: C:\\PulseAudio\\start-pulseaudio.cmd"
+    echo "2) Export PULSE_SERVER in WSL:"
+    echo "   export PULSE_SERVER=tcp:\$(awk '/^nameserver / {print \$2; exit}' /etc/resolv.conf):4713"
+  else
+    echo "1) Install PulseAudio:  sudo apt install pulseaudio"
+    echo "2) Start the daemon:    pulseaudio --start"
+    echo "   (or install as user service: systemctl --user enable --now pulseaudio)"
+    echo "3) For SSH audio forwarding from your client machine:"
+    echo "   - Client: pactl load-module module-native-protocol-tcp auth-anonymous=1"
+    echo "   - SSH:     ssh -R 4713:localhost:4713 user@thishost"
+    echo "   - Server:  export PULSE_SERVER=tcp:localhost:4713"
+  fi
+  echo
+  echo "Re-run: ./preflight_voice.sh"
   exit 1
 fi
 
