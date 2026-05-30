@@ -243,6 +243,40 @@ Windows, use tunnel ports (e.g., `18101`, `18102`, `18103`) instead.
 
 ---
 
+## Hermes Integration
+
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) (v0.15.0, installed at `~/.hermes/`) is configured to use Christopher's llama-server as its LLM backend. This makes the full Hermes TUI, Telegram gateway, and voice toolset run on the local model instead of the cloud.
+
+**How it's wired:**
+
+| Layer | Engine | Config |
+|-------|--------|--------|
+| LLM | Christopher's llama-server (`localhost:8080`) | `~/.hermes/config.yaml` — `model.provider: custom`, `model.base_url: http://localhost:8080/v1` |
+| STT | Local Whisper (`base` model) | Hermes built-in |
+| TTS | Piper (`en_US-libritts-high`) | Hermes built-in |
+
+**Requirements:** the llama-server systemd user service must be running (`systemctl --user status llama-server`). It starts automatically on boot.
+
+**Usage:**
+
+```bash
+hermes               # CLI — uses Gemma 4 via llama-server
+/voice on            # inside Hermes TUI — enables mic + Piper TTS
+hermes gateway       # start Telegram/Discord gateway
+```
+
+**Switching Hermes to a different model:** restart llama-server with the desired profile, then update `model.default` in `~/.hermes/config.yaml`:
+
+```bash
+# Example: switch to Llama 3.2 3B
+systemctl --user stop llama-server
+# edit ~/.config/systemd/user/llama-server.service to change -m path
+systemctl --user daemon-reload && systemctl --user start llama-server
+hermes config set model.default Llama-3.2-3B-Instruct-Q4_K_M.gguf
+```
+
+---
+
 ## Workflow Templates
 
 Three ready-to-use voice workflow templates in `workflows/`:
@@ -323,6 +357,7 @@ Minimal by design — this is a local tool, not a service. No AI API clients nee
 |-----------|-----------|--------|
 | `mcp-consulting-kit` MCP servers (8101–8103) | christopher imports from | Via HTTP to `FUSIONAL_*_URL` |
 | `fusional` gateway | christopher may route through | Optional gateway layer |
+| Hermes Agent (`~/.hermes/`) | hermes → christopher | Hermes uses llama-server on `:8080` as its LLM backend |
 | t3610 deployment | All three repos sync here | Via `scripts/sync-all.*` in `mcp-consulting-kit` |
 
 Local development assumes all repos are siblings:
