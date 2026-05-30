@@ -133,14 +133,14 @@ Christopher uses named model profiles to switch between LLMs without editing con
 
 | Profile | Model | VRAM | Best for |
 |---------|-------|------|----------|
-| `llama32-3b` | Llama 3.2 3B Q4_K_M | 4GB | Default; best fit for GTX 1050 Ti |
+| `gemma4` | Gemma 4 E4B Instruct Q4_K_M | 4GB | **Default**; thinking model, all-GPU on GTX 1050 Ti, ~8.5s avg |
+| `llama32-3b` | Llama 3.2 3B Q4_K_M | 4GB | Fastest fallback; no thinking overhead |
 | `qwen25-3b` | Qwen2.5 3B Q4_K_M | 4GB | Alternative 3B with strong reasoning |
 | `mistral-7b` | Mistral 7B Q4_K_M | 4GB (slow) / 8GB | Better quality, slower on 4GB |
-| `gemma4` | Gemma 4 E4B Instruct Q4_K_M | 4GB | Google Gemma 4 E4B (4.5B dense, 4.98 GB) |
 
 Set default in `.env`:
 ```bash
-MODEL_PROFILE=llama32-3b
+MODEL_PROFILE=gemma4
 ```
 
 Override per run:
@@ -153,7 +153,7 @@ python3 christopher.py --chat --model-profile mistral-7b --ngl 28 --ctx 512
 
 | VRAM | Recommended flags |
 |------|-------------------|
-| 4GB (GTX 1050 Ti) | Profile defaults for `llama32-3b` / `qwen25-3b` |
+| 4GB (GTX 1050 Ti) | Profile defaults for `gemma4` / `llama32-3b` / `qwen25-3b` |
 | 4GB (Mistral 7B) | `--ngl 28 --ctx 512` |
 | 8GB | `--ngl 40 --ctx 2048` |
 | 16GB+ | `--ngl 99 --ctx 4096` |
