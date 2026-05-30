@@ -118,6 +118,7 @@ python3 christopher.py --voice
 python3 christopher.py --chat
 
 # Benchmark mode (compare model latencies)
+python3 christopher.py --benchmark --model-profile gemma4
 python3 christopher.py --benchmark --model-profile llama32-3b
 python3 christopher.py --benchmark --model-profile qwen25-3b
 python3 christopher.py --benchmark --model-profile mistral-7b --ngl 28 --ctx 512
@@ -281,6 +282,7 @@ Full schema documentation: `docs/workflow-templates.md`.
 
 ```bash
 # Compare all three profiles on your hardware
+python3 christopher.py --benchmark --model-profile gemma4
 python3 christopher.py --benchmark --model-profile llama32-3b
 python3 christopher.py --benchmark --model-profile qwen25-3b
 python3 christopher.py --benchmark --model-profile mistral-7b --ngl 28 --ctx 512
