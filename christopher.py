@@ -175,9 +175,13 @@ KB_MAX_FILE_CHARS = int(ENV.get("KB_MAX_FILE_CHARS", "1400"))
 
 LISTEN_SECONDS    = int(ENV.get("LISTEN_SECONDS", "5"))
 
-# PulseAudio — resolved dynamically so it survives WSL2 reboots where host IP changes
-PULSE_SERVER = os.environ.get("PULSE_SERVER", "tcp:172.24.128.1:4713")
-PULSE_ENV    = {**os.environ, "PULSE_SERVER": PULSE_SERVER}
+# PulseAudio — uses PULSE_SERVER env var if set (e.g. for SSH audio forwarding),
+# otherwise falls back to the local PulseAudio daemon socket.
+PULSE_SERVER = os.environ.get("PULSE_SERVER", ENV.get("PULSE_SERVER", ""))
+PULSE_ENV    = {**os.environ, **({"PULSE_SERVER": PULSE_SERVER} if PULSE_SERVER else {})}
+# PAREC_DEVICE — explicit PulseAudio source name for recording.
+# Prevents parec from defaulting to the monitor (loopback) source instead of the mic.
+PAREC_DEVICE = os.environ.get("PAREC_DEVICE", ENV.get("PAREC_DEVICE", ""))
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 
@@ -443,7 +447,7 @@ def run_benchmark(prompt: str, runs: int):
             {"role": "user", "content": prompt},
         ]
         started = time.perf_counter()
-        response = chat_completion(messages, max_tokens=120)
+        response = chat_completion(messages, max_tokens=400)
         elapsed = time.perf_counter() - started
         latencies.append(elapsed)
         print(f"Run {index}: {elapsed:.2f}s | {response[:120]}")
@@ -483,7 +487,7 @@ def chat_completion(messages: list, max_tokens: int = 300) -> str:
         "max_tokens": max_tokens,
         "temperature": 0.7,
         "top_p": 0.9,
-        "stop": ["</s>", "[INST]", "User:", "You:", "Tool result:", "TOOL_RESULT:"],
+        "stop": ["User:", "You:", "Tool result:", "TOOL_RESULT:"],
     }
     headers = {"Content-Type": "application/json"}
     try:
@@ -494,8 +498,13 @@ def chat_completion(messages: list, max_tokens: int = 300) -> str:
             timeout=120,
         )
         r.raise_for_status()
-        logger.debug(f"chat_completion tokens={r.json().get('usage', {}).get('completion_tokens', 'unknown')}")
-        return r.json()["choices"][0]["message"]["content"].strip()
+        data = r.json()
+        logger.debug(f"chat_completion tokens={data.get('usage', {}).get('completion_tokens', 'unknown')}")
+        msg = data["choices"][0]["message"]
+        content = (msg.get("content") or "").strip()
+        if not content:
+            content = (msg.get("reasoning_content") or "").strip()
+        return content
     except requests.exceptions.Timeout:
         logger.error("LLM timeout after 120s")
         return "LLM error: Request timed out"
@@ -549,8 +558,12 @@ def run_turn(messages: list, user_input: str, voice_mode: bool) -> str:
 def _record_parec(raw_file: str) -> bool:
     """Record audio via parec (PulseAudio). Returns True on success."""
     try:
+        cmd = ["parec", "--format=s16le", "--rate=16000", "--channels=1"]
+        if PAREC_DEVICE:
+            cmd += ["--device", PAREC_DEVICE]
+        cmd.append(raw_file)
         rec_proc = subprocess.Popen(
-            ["parec", "--format=s16le", "--rate=16000", "--channels=1", raw_file],
+            cmd,
             env=PULSE_ENV,
             stderr=subprocess.DEVNULL,
         )
@@ -745,10 +758,10 @@ def speak(text: str) -> None:
     piper_raw_cmd = [PIPER_BIN, "-m", PIPER_MODEL, "-q", "--output-raw"]
     piper_wav_cmd = [PIPER_BIN, "-m", PIPER_MODEL, "-q"]
 
-    # 1. paplay (PulseAudio — WSL2 primary)
+    # 1. paplay (PulseAudio — primary)
     if _pipe_piper_to_player(
         text,
-        piper_wav_cmd,
+        piper_raw_cmd,
         ["paplay", "--raw", "--format=s16le", "--rate=22050", "--channels=1"],
         player_env=PULSE_ENV,
     ):
@@ -896,9 +909,8 @@ def main():
     print()
 
     if (not args.no_server) and is_server_reachable(timeout=2):
-        if not Path(LLAMA_SERVER_BIN).exists() or not Path(LLAMA_MODEL).exists():
-            print(f"⚡ Detected reachable llama-server at {LLAMA_SERVER_URL}; using existing server mode.")
-            args.no_server = True
+        print(f"⚡ Detected reachable llama-server at {LLAMA_SERVER_URL}; using existing instance.")
+        args.no_server = True
 
     preflight_issues = validate_runtime(voice_mode=voice_mode, skip_server_start=args.no_server)
     if preflight_issues:

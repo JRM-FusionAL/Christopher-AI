@@ -25,7 +25,7 @@ This repo pairs with `mcp-consulting-kit` (MCP tool servers) and `fusional`
 | Component | Engine | Default Model |
 |-----------|--------|---------------|
 | Speech recognition | whisper.cpp (compiled from source) | `ggml-base.en` |
-| Language model | llama.cpp + CUDA (compiled from source) | Llama 3.2 3B Q4_K_M |
+| Language model | llama.cpp + CUDA (compiled from source) | Gemma 4 E4B Instruct Q4_K_M |
 | Text to speech | Piper TTS | `en_US-libritts-high.onnx` |
 | Orchestrator | `christopher.py` (Python 3) | — |
 
@@ -118,6 +118,7 @@ python3 christopher.py --voice
 python3 christopher.py --chat
 
 # Benchmark mode (compare model latencies)
+python3 christopher.py --benchmark --model-profile gemma4
 python3 christopher.py --benchmark --model-profile llama32-3b
 python3 christopher.py --benchmark --model-profile qwen25-3b
 python3 christopher.py --benchmark --model-profile mistral-7b --ngl 28 --ctx 512
@@ -133,14 +134,14 @@ Christopher uses named model profiles to switch between LLMs without editing con
 
 | Profile | Model | VRAM | Best for |
 |---------|-------|------|----------|
-| `llama32-3b` | Llama 3.2 3B Q4_K_M | 4GB | Default; best fit for GTX 1050 Ti |
+| `gemma4` | Gemma 4 E4B Instruct Q4_K_M | 4GB | **Default**; thinking model, all-GPU on GTX 1050 Ti, ~8.5s avg |
+| `llama32-3b` | Llama 3.2 3B Q4_K_M | 4GB | Fastest fallback; no thinking overhead |
 | `qwen25-3b` | Qwen2.5 3B Q4_K_M | 4GB | Alternative 3B with strong reasoning |
 | `mistral-7b` | Mistral 7B Q4_K_M | 4GB (slow) / 8GB | Better quality, slower on 4GB |
-| `gemma4` | Gemma 4 E4B Instruct Q4_K_M | 4GB | Google Gemma 4 E4B (4.5B dense, 4.98 GB) |
 
 Set default in `.env`:
 ```bash
-MODEL_PROFILE=llama32-3b
+MODEL_PROFILE=gemma4
 ```
 
 Override per run:
@@ -153,7 +154,7 @@ python3 christopher.py --chat --model-profile mistral-7b --ngl 28 --ctx 512
 
 | VRAM | Recommended flags |
 |------|-------------------|
-| 4GB (GTX 1050 Ti) | Profile defaults for `llama32-3b` / `qwen25-3b` |
+| 4GB (GTX 1050 Ti) | Profile defaults for `gemma4` / `llama32-3b` / `qwen25-3b` |
 | 4GB (Mistral 7B) | `--ngl 28 --ctx 512` |
 | 8GB | `--ngl 40 --ctx 2048` |
 | 16GB+ | `--ngl 99 --ctx 4096` |
@@ -167,7 +168,7 @@ correct paths. Key vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MODEL_PROFILE` | `llama32-3b` | Default model profile |
+| `MODEL_PROFILE` | `gemma4` | Default model profile |
 | `LLAMA_SERVER_BIN` | `~/llama.cpp/build/bin/llama-server` | Path to llama-server binary |
 | `LLAMA_MODEL` | (from profile) | GGUF model file path |
 | `LLAMA_MODEL_LLAMA32_3B` | — | Path for llama32-3b profile |
@@ -242,6 +243,40 @@ Windows, use tunnel ports (e.g., `18101`, `18102`, `18103`) instead.
 
 ---
 
+## Hermes Integration
+
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) (v0.15.0, installed at `~/.hermes/`) is configured to use Christopher's llama-server as its LLM backend. This makes the full Hermes TUI, Telegram gateway, and voice toolset run on the local model instead of the cloud.
+
+**How it's wired:**
+
+| Layer | Engine | Config |
+|-------|--------|--------|
+| LLM | Christopher's llama-server (`localhost:8080`) | `~/.hermes/config.yaml` — `model.provider: custom`, `model.base_url: http://localhost:8080/v1` |
+| STT | Local Whisper (`base` model) | Hermes built-in |
+| TTS | Piper (`en_US-libritts-high`) | Hermes built-in |
+
+**Requirements:** the llama-server systemd user service must be running (`systemctl --user status llama-server`). It starts automatically on boot.
+
+**Usage:**
+
+```bash
+hermes               # CLI — uses Gemma 4 via llama-server
+/voice on            # inside Hermes TUI — enables mic + Piper TTS
+hermes gateway       # start Telegram/Discord gateway
+```
+
+**Switching Hermes to a different model:** restart llama-server with the desired profile, then update `model.default` in `~/.hermes/config.yaml`:
+
+```bash
+# Example: switch to Llama 3.2 3B
+systemctl --user stop llama-server
+# edit ~/.config/systemd/user/llama-server.service to change -m path
+systemctl --user daemon-reload && systemctl --user start llama-server
+hermes config set model.default Llama-3.2-3B-Instruct-Q4_K_M.gguf
+```
+
+---
+
 ## Workflow Templates
 
 Three ready-to-use voice workflow templates in `workflows/`:
@@ -281,6 +316,7 @@ Full schema documentation: `docs/workflow-templates.md`.
 
 ```bash
 # Compare all three profiles on your hardware
+python3 christopher.py --benchmark --model-profile gemma4
 python3 christopher.py --benchmark --model-profile llama32-3b
 python3 christopher.py --benchmark --model-profile qwen25-3b
 python3 christopher.py --benchmark --model-profile mistral-7b --ngl 28 --ctx 512
@@ -321,6 +357,7 @@ Minimal by design — this is a local tool, not a service. No AI API clients nee
 |-----------|-----------|--------|
 | `mcp-consulting-kit` MCP servers (8101–8103) | christopher imports from | Via HTTP to `FUSIONAL_*_URL` |
 | `fusional` gateway | christopher may route through | Optional gateway layer |
+| Hermes Agent (`~/.hermes/`) | hermes → christopher | Hermes uses llama-server on `:8080` as its LLM backend |
 | t3610 deployment | All three repos sync here | Via `scripts/sync-all.*` in `mcp-consulting-kit` |
 
 Local development assumes all repos are siblings:
