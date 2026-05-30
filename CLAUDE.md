@@ -167,7 +167,7 @@ correct paths. Key vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MODEL_PROFILE` | `llama32-3b` | Default model profile |
+| `MODEL_PROFILE` | `gemma4` | Default model profile |
 | `LLAMA_SERVER_BIN` | `~/llama.cpp/build/bin/llama-server` | Path to llama-server binary |
 | `LLAMA_MODEL` | (from profile) | GGUF model file path |
 | `LLAMA_MODEL_LLAMA32_3B` | — | Path for llama32-3b profile |
