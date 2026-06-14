@@ -25,7 +25,7 @@ This repo pairs with `mcp-consulting-kit` (MCP tool servers) and `fusional`
 | Component | Engine | Default Model |
 |-----------|--------|---------------|
 | Speech recognition | whisper.cpp (compiled from source) | `ggml-base.en` |
-| Language model | llama.cpp + CUDA (compiled from source) | Gemma 4 E4B Instruct Q4_K_M |
+| Language model | llama.cpp + CUDA (compiled from source) | Qwen2.5-3B-Instruct-Q4_K_M (active); gemma4 also supported |
 | Text to speech | Piper TTS | `en_US-libritts-high.onnx` |
 | Orchestrator | `christopher.py` (Python 3) | — |
 
@@ -134,9 +134,9 @@ Christopher uses named model profiles to switch between LLMs without editing con
 
 | Profile | Model | VRAM | Best for |
 |---------|-------|------|----------|
-| `gemma4` | Gemma 4 E4B Instruct Q4_K_M | 4GB | **Default**; thinking model, all-GPU on GTX 1050 Ti, ~8.5s avg |
+| `gemma4` | Gemma 4 E4B Instruct Q4_K_M | 4GB | Thinking model, all-GPU on GTX 1050 Ti, ~8.5s avg |
 | `llama32-3b` | Llama 3.2 3B Q4_K_M | 4GB | Fastest fallback; no thinking overhead |
-| `qwen25-3b` | Qwen2.5 3B Q4_K_M | 4GB | Alternative 3B with strong reasoning |
+| `qwen25-3b` | Qwen2.5 3B Q4_K_M | 4GB | **Active default** (llama-server systemd service); strong reasoning |
 | `mistral-7b` | Mistral 7B Q4_K_M | 4GB (slow) / 8GB | Better quality, slower on 4GB |
 
 Set default in `.env`:
@@ -168,7 +168,7 @@ correct paths. Key vars:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MODEL_PROFILE` | `gemma4` | Default model profile |
+| `MODEL_PROFILE` | `qwen25-3b` | Active model profile (systemd service runs Qwen2.5-3B; change to `gemma4` if switching) |
 | `LLAMA_SERVER_BIN` | `~/llama.cpp/build/bin/llama-server` | Path to llama-server binary |
 | `LLAMA_MODEL` | (from profile) | GGUF model file path |
 | `LLAMA_MODEL_LLAMA32_3B` | — | Path for llama32-3b profile |
@@ -260,7 +260,7 @@ Windows, use tunnel ports (e.g., `18101`, `18102`, `18103`) instead.
 **Usage:**
 
 ```bash
-hermes               # CLI — uses Gemma 4 via llama-server
+hermes               # CLI — uses Qwen2.5-3B via llama-server
 /voice on            # inside Hermes TUI — enables mic + Piper TTS
 hermes gateway       # start Telegram/Discord gateway
 ```
