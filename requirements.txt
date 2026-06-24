@@ -5,7 +5,7 @@ fastapi==0.136.3
 uvicorn[standard]==0.48.0
 python-dotenv==1.2.2
 requests==2.34.2
-scipy==1.17.1
+scipy==1.18.0
 httpx==0.28.1
 anthropic==0.104.1
 pydantic==2.13.4
