@@ -4,5 +4,5 @@
 
 requests==2.34.2
 python-dotenv==1.2.2
-fastapi==0.138.0
+fastapi==0.138.1
 uvicorn==0.49.0
