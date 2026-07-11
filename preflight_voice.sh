@@ -154,7 +154,7 @@ if [[ "$CAPTURE_BACKEND" == "parec" ]]; then
 fi
 
 if [[ -s "$WAV_FILE" && -x "$WHISPER_BIN" && -f "$WHISPER_MODEL" ]]; then
-  if "$WHISPER_BIN" -m "$WHISPER_MODEL" -f "$WAV_FILE" --output-txt --output-file "$TRANSCRIPT_BASE" --no-timestamps -t 4 >/dev/null 2>&1; then
+  if "$WHISPER_BIN" -m "$WHISPER_MODEL" -f "$WAV_FILE" --output-txt --output-file "$TRANSCRIPT_BASE" --no-timestamps -t 4 ${WHISPER_NO_GPU:+-ng} >/dev/null 2>&1; then
     if [[ -f "${TRANSCRIPT_BASE}.txt" ]]; then
       pass "Whisper ASR executed successfully"
     else

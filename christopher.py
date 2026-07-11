@@ -152,6 +152,9 @@ WHISPER_MODEL     = _first_existing_path([
     "~/whisper.cpp/models/ggml-base.en.bin",
     "/home/oledad/whisper.cpp/models/ggml-base.en.bin",
 ])
+# Default CPU-only: llama-server occupies ~3.5GB of the 4GB card, so whisper's
+# CUDA init aborts (ggml_abort in buffer alloc). Set WHISPER_NO_GPU=0 to re-enable GPU.
+WHISPER_NO_GPU    = ENV.get("WHISPER_NO_GPU", "1") == "1"
 
 PIPER_BIN         = _which_any([ENV.get("PIPER_BIN", ""), "piper", "piper.exe"], fallback="piper")
 PIPER_MODEL       = _first_existing_path([
@@ -174,6 +177,18 @@ KB_MAX_TOTAL_CHARS = int(ENV.get("KB_MAX_TOTAL_CHARS", "2800"))
 KB_MAX_FILE_CHARS = int(ENV.get("KB_MAX_FILE_CHARS", "1400"))
 
 LISTEN_SECONDS    = int(ENV.get("LISTEN_SECONDS", "5"))
+# Silence gate: skip transcription when captured audio RMS falls below this
+# (int16 scale). Prevents whisper hallucinating words from a quiet room.
+VOICE_RMS_THRESHOLD = int(ENV.get("VOICE_RMS_THRESHOLD", "300"))
+# Whisper's stock hallucinations on silence/noise — never treat these as speech.
+WHISPER_HALLUCINATIONS = {
+    "you", "q", "thank you", "thanks for watching", "thank you for watching",
+    "bye", "so", "the", "[blank_audio]", "(silence)", "[silence]", "*silence*",
+}
+# VAD mode (--vad): stop recording after this much trailing silence, and never
+# record a single utterance longer than VAD_MAX_SECONDS.
+VAD_TRAIL_SILENCE = float(ENV.get("VAD_TRAIL_SILENCE", "1.0"))
+VAD_MAX_SECONDS   = float(ENV.get("VAD_MAX_SECONDS", "15"))
 
 # PulseAudio — uses PULSE_SERVER env var if set (e.g. for SSH audio forwarding),
 # otherwise falls back to the local PulseAudio daemon socket.
@@ -372,7 +387,7 @@ def call_tool(tool_name: str, params: dict) -> str:
 
     except requests.exceptions.ConnectionError:
         logger.error(f"tool={tool_name} connection_error FusionAL server not reachable")
-        return "Tool error: FusionAL server not reachable. Is docker compose running?"
+        return "Tool error: FusionAL server not reachable. Is uvicorn running on :8089?"
     except Exception as e:
         logger.error(f"tool={tool_name} error={e}")
         return f"Tool error: {e}"
@@ -635,6 +650,7 @@ def listen(tmpdir: str) -> str:
 
     # Convert raw PCM -> WAV for whisper.cpp (skipped when arecord wrote WAV directly)
     if not used_arecord:
+        sox_ok = False
         try:
             conv = subprocess.run(
                 ["sox", "-t", "raw", "-r", "16000", "-e", "signed", "-b", "16",
@@ -642,31 +658,51 @@ def listen(tmpdir: str) -> str:
                 capture_output=True,
                 timeout=10
             )
-            if conv.returncode != 0:
+            sox_ok = conv.returncode == 0
+            if not sox_ok:
                 logger.debug(f"sox failed ({conv.returncode}), trying ffmpeg")
-                try:
-                    subprocess.run(
-                        ["ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1",
-                         "-i", raw_file, audio_file],
-                        capture_output=True,
-                        timeout=10
-                    )
-                except (FileNotFoundError, subprocess.TimeoutExpired) as e:
-                    logger.error(f"ffmpeg failed: {e}, cannot convert audio")
-                    return ""
+        except FileNotFoundError:
+            logger.debug("sox not installed, trying ffmpeg")
         except subprocess.TimeoutExpired:
             logger.error("Audio conversion timeout")
             return ""
+        if not sox_ok:
+            try:
+                subprocess.run(
+                    ["ffmpeg", "-y", "-f", "s16le", "-ar", "16000", "-ac", "1",
+                     "-i", raw_file, audio_file],
+                    capture_output=True,
+                    timeout=10
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+                logger.error(f"ffmpeg failed: {e}, cannot convert audio")
+                return ""
 
         if not os.path.exists(audio_file):
             logger.error("Audio conversion produced no output file")
             return ""
 
+    return _transcribe(audio_file, transcript_base)
+
+
+def _transcribe(audio_file: str, transcript_base: str) -> str:
+    """Silence-gate, run whisper.cpp on a WAV file, and filter hallucinations."""
+    try:
+        _, samples = wavfile.read(audio_file)
+        rms = float((abs(samples.astype("float64")) ** 2).mean() ** 0.5)
+        if rms < VOICE_RMS_THRESHOLD:
+            logger.info(f"silence gate: rms={rms:.0f} < {VOICE_RMS_THRESHOLD}, skipping transcription")
+            return ""
+        logger.info(f"audio level rms={rms:.0f} (threshold {VOICE_RMS_THRESHOLD})")
+    except Exception as e:
+        logger.debug(f"silence gate skipped (wav read failed: {e})")
+
     try:
         proc = subprocess.run(
             [WHISPER_BIN, "-m", WHISPER_MODEL, "-f", audio_file,
              "--output-txt", "--output-file", transcript_base,
-             "--no-timestamps", "-t", "4"],
+             "--no-timestamps", "-t", "4"]
+            + (["-ng"] if WHISPER_NO_GPU else []),
             capture_output=True,
             timeout=30
         )
@@ -689,6 +725,9 @@ def listen(tmpdir: str) -> str:
             with open(txt_file, encoding="utf-8") as fh:
                 text = fh.read().strip()
                 logger.debug(f"transcribed {len(text)} chars")
+                if text.lower().strip(".!?, ") in WHISPER_HALLUCINATIONS:
+                    logger.info(f"dropping whisper hallucination: {text!r}")
+                    return ""
                 return text
         except Exception as e:
             logger.error(f"Failed to read transcript: {e}")
@@ -698,13 +737,85 @@ def listen(tmpdir: str) -> str:
         return ""
 
 
+def listen_vad(tmpdir: str) -> str:
+    """Voice-activity-triggered capture: wait for speech (RMS above the gate
+    threshold), record until VAD_TRAIL_SILENCE of quiet or VAD_MAX_SECONDS,
+    then transcribe. Blocks until something is said."""
+    import numpy as np
+
+    audio_file      = os.path.join(tmpdir, "input.wav")
+    transcript_base = os.path.join(tmpdir, "transcript")
+
+    cmd = ["parec", "--format=s16le", "--rate=16000", "--channels=1"]
+    if PAREC_DEVICE:
+        cmd += ["--device", PAREC_DEVICE]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, env=PULSE_ENV)
+    except FileNotFoundError:
+        logger.warning("parec unavailable for VAD, falling back to fixed-window listen")
+        return listen(tmpdir)
+
+    chunk_seconds = 0.25
+    chunk_bytes   = int(16000 * 2 * chunk_seconds)
+    quiet_to_stop = max(1, int(VAD_TRAIL_SILENCE / chunk_seconds))
+    max_chunks    = max(4, int(VAD_MAX_SECONDS / chunk_seconds))
+
+    print("🎙  Listening — speak when ready (Ctrl+C to quit)", flush=True)
+    buf: list = []
+    pre = b""
+    started = False
+    quiet = 0
+    try:
+        while True:
+            data = proc.stdout.read(chunk_bytes)
+            if not data:
+                logger.warning("VAD capture stream ended unexpectedly")
+                break
+            rms = float(np.sqrt((np.frombuffer(data, dtype=np.int16).astype(np.float64) ** 2).mean()))
+            if not started:
+                if rms >= VOICE_RMS_THRESHOLD:
+                    started = True
+                    buf = [pre, data]  # one chunk of pre-roll so the first word survives
+                    print("🔴 Recording...", end="", flush=True)
+                else:
+                    pre = data
+            else:
+                buf.append(data)
+                quiet = quiet + 1 if rms < VOICE_RMS_THRESHOLD else 0
+                if quiet >= quiet_to_stop or len(buf) >= max_chunks:
+                    break
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+    if not started or not buf:
+        return ""
+    print(" done")
+    samples = np.frombuffer(b"".join(buf), dtype=np.int16)
+    wavfile.write(audio_file, 16000, samples)
+    return _transcribe(audio_file, transcript_base)
+
+
 def _pipe_piper_to_player(text: str, piper_cmd: list, player_cmd: list,
                            player_env: dict | None = None) -> bool:
-    """Run Piper TTS piped into a player process. Returns True on success."""
+    """Run Piper TTS piped into a player process. Returns True on success.
+
+    Text goes to piper via a temp file (-i): piper-tts >= 1.4 mangles plain
+    text on stdin, synthesizing a fraction of a second of garbage.
+    """
+    text_file = None
     try:
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False,
+                                         encoding="utf-8") as tf:
+            tf.write(text)
+            text_file = tf.name
         piper_proc = subprocess.Popen(
-            piper_cmd,
-            stdin=subprocess.PIPE,
+            piper_cmd + ["-i", text_file],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
@@ -715,8 +826,6 @@ def _pipe_piper_to_player(text: str, piper_cmd: list, player_cmd: list,
             stderr=subprocess.DEVNULL,
             env=player_env,
         )
-        piper_proc.stdin.write(text.encode("utf-8"))
-        piper_proc.stdin.close()
         try:
             play_proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
@@ -740,6 +849,12 @@ def _pipe_piper_to_player(text: str, piper_cmd: list, player_cmd: list,
     except Exception as e:
         logger.error(f"Audio playback error: {e}")
         return False
+    finally:
+        if text_file:
+            try:
+                os.unlink(text_file)
+            except OSError:
+                pass
 
 
 def speak(text: str) -> None:
@@ -864,6 +979,8 @@ def main():
     parser = argparse.ArgumentParser(description="Christopher — Local Voice AI")
     parser.add_argument("--chat",      action="store_true", help="Text chat mode (no mic/TTS)")
     parser.add_argument("--voice",     action="store_true", help="Full voice mode (default)")
+    parser.add_argument("--vad",       action="store_true",
+                        help="Hands-free voice mode: record when speech is detected instead of push-to-talk")
     parser.add_argument("--no-server", action="store_true", help="Skip llama-server launch (already running)")
     parser.add_argument("--model-profile", choices=sorted(MODEL_PROFILES.keys()), default=DEFAULT_MODEL_PROFILE,
                         help="Select a predefined local model profile")
@@ -888,6 +1005,7 @@ def main():
     )
 
     voice_mode = not args.chat and not args.benchmark and not args.server
+    vad_mode = voice_mode and args.vad
 
     print("=" * 55)
     print("  Christopher — Local AI")
@@ -974,12 +1092,26 @@ def main():
     try:
         while True:
             if voice_mode:
-                user_input = listen(tmpdir)
+                if vad_mode:
+                    user_input = listen_vad(tmpdir)
+                else:
+                    # Push-to-talk: Enter opens the mic window
+                    try:
+                        key = input("⏎  Enter to talk ('q' to quit): ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        break
+                    if key in ("q", "quit", "exit"):
+                        break
+                    user_input = listen(tmpdir)
                 if not user_input:
-                    print("⚠️  No speech detected")
+                    print(" (quiet)")
                     continue
                 logger.info(f"speech transcript={user_input!r}")
                 print(f"👤 You: {user_input}")
+                if user_input.lower().strip(".!?, ") in ("quit", "exit", "goodbye", "shut down", "stop listening"):
+                    print("Christopher: Goodbye.")
+                    speak("Goodbye.")
+                    break
             else:
                 try:
                     user_input = input("You: ").strip()
