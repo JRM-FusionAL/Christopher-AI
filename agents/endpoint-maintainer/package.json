@@ -13,7 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "agents": "^0.13.2"
+    "agents": "^0.20.1"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.8",
