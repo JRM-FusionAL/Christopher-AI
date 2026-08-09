@@ -4,6 +4,9 @@
 
 set -u
 
+# Clear PYTHONPATH to avoid Hermes agent env bleed
+export PYTHONPATH=""
+
 WHISPER_BIN="${WHISPER_BIN:-$HOME/whisper.cpp/build/bin/whisper-cli}"
 WHISPER_MODEL="${WHISPER_MODEL:-$HOME/whisper.cpp/models/ggml-base.en.bin}"
 LLAMA_BIN="${LLAMA_BIN:-$HOME/llama.cpp/build/bin/llama-cli}"
