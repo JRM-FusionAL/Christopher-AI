@@ -1,0 +1,12 @@
+{
+  "harness": "claude_code",
+  "issues": [
+    {
+      "severity": "error",
+      "code": "MISSING_MCP_CONFIG",
+      "message": "No MCP servers configured (checked .mcp.json and ~/.claude.json)",
+      "fix": "Run: agentstack-init init --harness claude_code"
+    }
+  ],
+  "score": 80
+}
