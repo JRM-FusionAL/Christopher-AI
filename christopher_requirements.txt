@@ -11,4 +11,4 @@ uvicorn==0.52.3
 setuptools>=84.0.0     # CVE-2026-23949 + CVE-2026-24049: setuptools<82.0.1 vendors jaraco.context 5.3.0 and wheel 0.45.1
 jaraco.context>=6.1.2  # CVE-2026-23949 (path traversal); fixed in 6.1.0
 wheel>=0.48.0          # CVE-2026-24049 (arbitrary file permission via path traversal); fixed in 0.46.2
-starlette>=1.4.1       # CVE-2026-48710 "BadHost": transitive dep of fastapi, unpinned otherwise; host-header auth bypass fixed in 1.0.1
+starlette>=1.6.0       # CVE-2026-48710 "BadHost": transitive dep of fastapi, unpinned otherwise; host-header auth bypass fixed in 1.0.1
