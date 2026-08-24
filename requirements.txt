@@ -3,7 +3,7 @@
 
 fastapi==0.141.1
 uvicorn[standard]==0.52.3
-python-dotenv==1.2.2
+python-dotenv==1.2.3
 requests==2.34.2
 scipy==1.18.0
 httpx==0.28.1
