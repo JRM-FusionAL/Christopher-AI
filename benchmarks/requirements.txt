@@ -3,4 +3,4 @@
 pyyaml>=6.0.3
 psutil>=7.2.2
 requests>=2.34.2        # already in christopher_requirements.txt; listed here for completeness
-python-dotenv>=1.0    # already in christopher_requirements.txt
+python-dotenv>=1.2.3    # already in christopher_requirements.txt
