@@ -4,7 +4,7 @@ import re
 import json
 
 # Import the logic from the actual file
-sys.path.append('/home/jrm_fusional/Projects/Christopher-AI')
+sys.path.append('/home/jrm-fusional/Projects/Christopher-AI')
 from christopher import parse_tool_call
 
 def test_parser():

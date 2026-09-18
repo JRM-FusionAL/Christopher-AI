@@ -137,6 +137,10 @@ LLAMA_SERVER_BIN  = _first_existing_path([
 CURRENT_MODEL_PROFILE = DEFAULT_MODEL_PROFILE
 LLAMA_MODEL       = _resolve_model_path(CURRENT_MODEL_PROFILE, ENV.get("LLAMA_MODEL", ""))
 LLAMA_SERVER_URL  = ENV.get("LLAMA_SERVER_URL", "http://localhost:8080")
+# Ollama requires an explicit "model" in /v1/chat/completions; llama-server does not
+# (it serves whichever single model it was launched with). Left empty, behaviour is
+# byte-identical to before, so a llama-server backend still works unchanged.
+LLM_MODEL_NAME    = ENV.get("LLM_MODEL_NAME", "")
 LLAMA_NGL         = int(ENV.get("LLAMA_NGL", str(_profile_default(CURRENT_MODEL_PROFILE, "default_ngl"))))
 LLAMA_THREADS     = int(ENV.get("LLAMA_THREADS", "4"))
 LLAMA_CTX         = int(ENV.get("LLAMA_CTX", str(_profile_default(CURRENT_MODEL_PROFILE, "default_ctx"))))
@@ -413,11 +417,16 @@ def wait_for_server(timeout=60):
 
 
 def is_server_reachable(timeout=3) -> bool:
-    try:
-        r = requests.get(f"{LLAMA_SERVER_URL}/health", timeout=timeout)
-        return r.status_code == 200
-    except Exception:
-        return False
+    # llama-server exposes /health. Ollama does not, but answers GET / with 200
+    # ("Ollama is running"), so fall back to the root probe before giving up.
+    for path in ("/health", "/"):
+        try:
+            r = requests.get(f"{LLAMA_SERVER_URL}{path}", timeout=timeout)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def start_llama_server():
@@ -504,6 +513,8 @@ def chat_completion(messages: list, max_tokens: int = 300) -> str:
         "top_p": 0.9,
         "stop": ["User:", "You:", "Tool result:", "TOOL_RESULT:"],
     }
+    if LLM_MODEL_NAME:
+        payload["model"] = LLM_MODEL_NAME
     headers = {"Content-Type": "application/json"}
     try:
         r = requests.post(
@@ -961,7 +972,7 @@ def build_server_app(kb_context: str) -> "FastAPI":
             "id": f"chatcmpl-{int(time.time())}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": os.path.basename(LLAMA_MODEL),
+            "model": LLM_MODEL_NAME or os.path.basename(LLAMA_MODEL),
             "choices": [{
                 "index": 0,
                 "message": {"role": "assistant", "content": response_text},
