@@ -29,6 +29,7 @@
     "vite": ">=8.0.16",
     "@babel/core": ">=7.29.6",
     "undici": ">=8.5.0",
-    "@cloudflare/workers-types": "^4.20260521.0"
+    "@cloudflare/workers-types": "^4.20260521.0",
+    "sharp": ">=0.35.4"
   }
 }
