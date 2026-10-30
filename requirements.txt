@@ -7,7 +7,7 @@ python-dotenv==1.2.4
 requests==2.34.2
 scipy==1.18.1
 httpx==0.28.1
-anthropic==1.17.0
+anthropic==2.3.0
 pydantic==2.14.2
 mcp[cli]==2.3.0
 
