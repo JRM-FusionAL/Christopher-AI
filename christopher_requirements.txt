@@ -4,7 +4,7 @@
 
 requests==2.34.2
 python-dotenv==1.2.3
-fastapi==0.141.1
+fastapi==0.162.0
 uvicorn==0.52.4
 
 # Security: pin transitive deps with known HIGH CVEs to patched versions (mirrors requirements.txt)
