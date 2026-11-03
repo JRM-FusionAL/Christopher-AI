@@ -28,8 +28,9 @@
     "hono": ">=4.13.5",
     "vite": ">=8.0.16",
     "@babel/core": ">=7.29.6",
-    "undici": ">=8.5.0",
+    "undici": ">=8.12.2",
     "@cloudflare/workers-types": "^4.20260521.0",
-    "sharp": ">=0.35.4"
+    "sharp": ">=0.35.5",
+    "source-map-js": ">=1.2.2"
   }
 }
