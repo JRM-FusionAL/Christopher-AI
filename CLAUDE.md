@@ -340,10 +340,10 @@ Results are written to `benchmarks/`. Use this before adopting a new model.
 ## Python Dependencies (`christopher_requirements.txt`)
 
 ```
-requests==2.33.1
-python-dotenv==1.2.1
-fastapi==0.136.0
-uvicorn==0.34.0
+requests==2.34.2
+python-dotenv==1.2.4
+fastapi==0.165.0
+uvicorn==0.54.0
 ```
 
 Minimal by design — this is a local tool, not a service. No AI API clients needed
