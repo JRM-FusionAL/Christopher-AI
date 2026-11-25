@@ -36,7 +36,8 @@ This repo pairs with `mcp-consulting-kit` (MCP tool servers) and `fusional`
 ```
 christopher-ai/
 ├── christopher.py                    # Main orchestrator — voice/chat/benchmark modes
-├── christopher_requirements.txt      # Python deps (requests, dotenv, fastapi, uvicorn)
+├── christopher_requirements.txt      # Minimal Python deps (requests, dotenv, fastapi, uvicorn)
+├── requirements.txt                  # Full Python env (adds scipy, httpx, anthropic, pydantic, mcp)
 ├── christopher_install.sh            # Lightweight installer (builds binaries + downloads model)
 ├── pilot_install.sh                  # Full pilot installer with prerequisite checks
 ├── preflight_voice.sh                # Pipeline health check before launch
@@ -301,17 +302,28 @@ Results are written to `benchmarks/`. Use this before adopting a new model.
 
 ---
 
-## Python Dependencies (`christopher_requirements.txt`)
+## Python Dependencies
 
-```
-requests==2.33.1
-python-dotenv==1.2.1
-fastapi==0.136.0
-uvicorn==0.34.0
-```
+There are three requirements files. The pinned versions live in the files
+themselves; check them rather than copying versions into docs.
 
-Minimal by design — this is a local tool, not a service. No AI API clients needed
-(all LLM inference happens via llama-server HTTP, not SDK).
+| File | Purpose | Contents |
+|------|---------|----------|
+| `christopher_requirements.txt` | Minimal runtime for `christopher.py` (what CI installs) | `requests`, `python-dotenv`, `fastapi`, `uvicorn` + security floors |
+| `requirements.txt` | Full environment | Above plus `uvicorn[standard]`, `scipy`, `httpx`, `anthropic`, `pydantic`, `mcp[cli]` + security floors |
+| `benchmarks/requirements.txt` | Benchmark-only extras | `pyyaml`, `psutil` (+ `requests`, `python-dotenv`) |
+
+Both runtime files carry the same security floors for transitive deps
+(`setuptools>=84.1.0`, `jaraco.context>=6.1.2`, `wheel>=0.48.0`, `starlette>=1.7.0`);
+the inline comments name the advisory each one addresses.
+
+Notes:
+- `christopher.py` imports `scipy` at module level, but `scipy` is only in
+  `requirements.txt`; CI installs it separately. `scipy==1.18.x` requires Python 3.12+,
+  so `requirements.txt` needs Python 3.12+ (CI uses 3.12).
+- The core voice pipeline makes no cloud API calls (all LLM inference goes through
+  llama-server HTTP). `anthropic` and `mcp` are listed in `requirements.txt` but are not
+  imported by any Python file in this repo today.
 
 ---
 
@@ -349,7 +361,7 @@ Full troubleshooting: `docs/pilot-setup-guide.md` and `docs/offline-runbook.md`.
 
 ## Key Conventions
 
-- Python 3.11+ required.
+- Python 3.11+ for `christopher_requirements.txt`; 3.12+ for the full `requirements.txt` (scipy 1.18.x).
 - No cloud API keys for the core voice pipeline — it is intentionally offline-first.
 - All secrets in `.env`, never committed. `.gitignore` covers `.env`.
 - `FUSIONAL_API_KEY` must match the `API_KEY` set in `mcp-consulting-kit` server `.env` files.
